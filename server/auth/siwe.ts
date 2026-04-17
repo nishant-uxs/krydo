@@ -7,6 +7,9 @@ import { ethAddressSchema, type WalletRole } from "@shared/schema";
 import { issueNonce, consumeNonce } from "./nonce-store";
 import { signAuthToken } from "./jwt";
 import { sensitiveLimiter } from "../middleware/security";
+import { childLogger } from "../logger";
+
+const log = childLogger("auth/siwe");
 
 const verifySchema = z.object({
   message: z.string().min(20).max(4_000),
@@ -90,8 +93,7 @@ export function registerAuthRoutes(app: Express) {
             blockNumber,
           });
         } catch (err: any) {
-          // eslint-disable-next-line no-console
-          console.error("Role anchor failed:", err.message);
+          log.error({ err: err.message, addr }, "role anchor failed");
         }
       }
 

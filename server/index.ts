@@ -5,6 +5,7 @@ import { serveStatic } from "./static";
 import { createServer } from "http";
 import { seedDatabase } from "./seed";
 import { installSecurityMiddleware } from "./middleware/security";
+import { logger } from "./logger";
 
 const app = express();
 const httpServer = createServer(app);
@@ -29,46 +30,34 @@ app.use(
 
 app.use(express.urlencoded({ extended: false, limit: "64kb" }));
 
+/**
+ * Back-compat shim for the old `log()` helper still called by server/vite.ts.
+ * Routes the message through the pino logger at info level.
+ */
 export function log(message: string, source = "express") {
-  const formattedTime = new Date().toLocaleTimeString("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: true,
-  });
-
-  console.log(`${formattedTime} [${source}] ${message}`);
+  logger.info({ source }, message);
 }
 
+// HTTP access log. Redacts auth headers via logger.redact config.
 app.use((req, res, next) => {
   const start = Date.now();
-  const path = req.path;
-  let capturedJsonResponse: Record<string, any> | undefined = undefined;
-
-  const originalResJson = res.json;
-  res.json = function (bodyJson, ...args) {
-    capturedJsonResponse = bodyJson;
-    return originalResJson.apply(res, [bodyJson, ...args]);
-  };
-
   res.on("finish", () => {
+    if (!req.path.startsWith("/api")) return;
     const duration = Date.now() - start;
-    if (path.startsWith("/api")) {
-      let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
-      if (capturedJsonResponse) {
-        logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
-      }
-
-      log(logLine);
-    }
+    const level = res.statusCode >= 500 ? "error" : res.statusCode >= 400 ? "warn" : "info";
+    logger[level]({
+      method: req.method,
+      path: req.path,
+      status: res.statusCode,
+      durationMs: duration,
+    }, `${req.method} ${req.path} → ${res.statusCode}`);
   });
-
   next();
 });
 
 (async () => {
   await seedDatabase().catch((err) => {
-    console.error("Seed error:", err);
+    logger.error({ err: err.message ?? String(err) }, "seed error");
   });
 
   await registerRoutes(httpServer, app);
@@ -77,7 +66,7 @@ app.use((req, res, next) => {
     const status = err.status || err.statusCode || 500;
     const message = err.message || "Internal Server Error";
 
-    console.error("Internal Server Error:", err);
+    logger.error({ err: err.message ?? String(err), status, stack: err.stack }, "internal server error");
 
     if (res.headersSent) {
       return next(err);
