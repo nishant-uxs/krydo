@@ -9,6 +9,7 @@ import {
 } from "../blockchain";
 import { requireAuth, requireRole } from "../auth/jwt";
 import { sensitiveLimiter } from "../middleware/security";
+import { readPageOpts, sendPage } from "../middleware/pagination";
 import { childLogger } from "../logger";
 
 const log = childLogger("routes/issuers");
@@ -22,10 +23,10 @@ const log = childLogger("routes/issuers");
  *  GET  /api/issuers/category/:cat     — filter by category
  */
 export function registerIssuerRoutes(app: Express) {
-  app.get("/api/issuers", async (_req, res) => {
+  app.get("/api/issuers", async (req, res) => {
     try {
-      const list = await storage.getIssuers();
-      res.json(list);
+      const page = await storage.listIssuersPaged(readPageOpts(req));
+      sendPage(res, page);
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }

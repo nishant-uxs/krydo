@@ -12,6 +12,7 @@ import {
 } from "../blockchain";
 import { requireAuth, requireRole } from "../auth/jwt";
 import { sensitiveLimiter } from "../middleware/security";
+import { readPageOpts, sendPage } from "../middleware/pagination";
 import { childLogger } from "../logger";
 
 const log = childLogger("routes/credentials");
@@ -23,10 +24,13 @@ export function registerCredentialRoutes(app: Express) {
   app.get("/api/credentials/:address", async (req, res) => {
     try {
       const { address } = req.params;
+      const opts = readPageOpts(req);
       const wallet = await storage.getWallet(address);
-      if (!wallet) return res.json([]);
-      if (wallet.role === "root") return res.json(await storage.getAllCredentials());
-      res.json(await storage.getCredentials(address));
+      if (!wallet) return sendPage(res, { items: [], nextCursor: null });
+      const page = wallet.role === "root"
+        ? await storage.listAllCredentialsPaged(opts)
+        : await storage.listCredentialsForHolderPaged(address, opts);
+      sendPage(res, page);
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }
@@ -35,7 +39,8 @@ export function registerCredentialRoutes(app: Express) {
   app.get("/api/credentials/issued/:address", async (req, res) => {
     try {
       const { address } = req.params;
-      res.json(await storage.getCredentialsByIssuer(address));
+      const page = await storage.listCredentialsByIssuerPaged(address, readPageOpts(req));
+      sendPage(res, page);
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }

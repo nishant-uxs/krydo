@@ -10,6 +10,7 @@ import {
 } from "../blockchain";
 import { requireAuth } from "../auth/jwt";
 import { sensitiveLimiter } from "../middleware/security";
+import { readPageOpts, sendPage } from "../middleware/pagination";
 import { childLogger } from "../logger";
 
 const log = childLogger("routes/zk");
@@ -195,8 +196,8 @@ export function registerZkRoutes(app: Express) {
   app.get("/api/zk/proofs/:address", async (req, res) => {
     try {
       const { address } = req.params;
-      const proofs = await storage.getZkProofsByProver(address);
-      res.json(proofs);
+      const page = await storage.listZkProofsByProverPaged(address, readPageOpts(req));
+      sendPage(res, page);
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }

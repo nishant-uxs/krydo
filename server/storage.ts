@@ -137,6 +137,55 @@ function zkProofFromDoc(id: string, data: any): ZkProof {
   };
 }
 
+// ---------- pagination ----------
+
+export const DEFAULT_PAGE_LIMIT = 50;
+export const MAX_PAGE_LIMIT = 200;
+
+/** Client-supplied pagination hint. Cursor is an opaque doc id. */
+export interface PageOpts {
+  limit?: number;
+  cursor?: string | null;
+}
+
+export interface PageResult<T> {
+  items: T[];
+  nextCursor: string | null;
+}
+
+/** Clamp + normalize an incoming PageOpts. */
+function normalizePage(opts?: PageOpts): { limit: number; cursor: string | null } {
+  const raw = opts?.limit ?? DEFAULT_PAGE_LIMIT;
+  const limit = Math.max(1, Math.min(MAX_PAGE_LIMIT, Math.floor(raw)));
+  return { limit, cursor: opts?.cursor ?? null };
+}
+
+/**
+ * Turn an ordered Firestore query into a paginated result. The cursor we
+ * return to the client is just the last document's id; on the next call we
+ * fetch that doc and use it as `startAfter` anchor.
+ */
+async function paginateQuery<T>(
+  baseQuery: FirebaseFirestore.Query,
+  coll: FirebaseFirestore.CollectionReference,
+  opts: PageOpts | undefined,
+  mapFn: (id: string, data: any) => T,
+): Promise<PageResult<T>> {
+  const { limit, cursor } = normalizePage(opts);
+  let q = baseQuery;
+  if (cursor) {
+    const anchor = await coll.doc(cursor).get();
+    if (anchor.exists) q = q.startAfter(anchor);
+  }
+  q = q.limit(limit + 1); // fetch one extra to detect if more exist
+  const snap = await q.get();
+  const hasMore = snap.docs.length > limit;
+  const pageDocs = hasMore ? snap.docs.slice(0, limit) : snap.docs;
+  const items = pageDocs.map((d) => mapFn(d.id, d.data()));
+  const nextCursor = hasMore ? pageDocs[pageDocs.length - 1].id : null;
+  return { items, nextCursor };
+}
+
 // ---------- IStorage ----------
 
 export interface IStorage {
@@ -195,6 +244,16 @@ export interface IStorage {
 
   updateWalletOnChainTxHash(address: string, txHash: string): Promise<void>;
   updateCredentialRequestOnChainTxHash(id: string, txHash: string): Promise<void>;
+
+  // --- paginated list endpoints ---
+  listIssuersPaged(opts?: PageOpts): Promise<PageResult<Issuer>>;
+  listCredentialsForHolderPaged(address: string, opts?: PageOpts): Promise<PageResult<Credential>>;
+  listCredentialsByIssuerPaged(address: string, opts?: PageOpts): Promise<PageResult<Credential>>;
+  listAllCredentialsPaged(opts?: PageOpts): Promise<PageResult<Credential>>;
+  listTransactionsPaged(address: string | undefined, opts?: PageOpts): Promise<PageResult<Transaction>>;
+  listCredentialRequestsByRequesterPaged(address: string, opts?: PageOpts): Promise<PageResult<CredentialRequest>>;
+  listCredentialRequestsForIssuerPaged(address: string, opts?: PageOpts): Promise<PageResult<CredentialRequest>>;
+  listZkProofsByProverPaged(address: string, opts?: PageOpts): Promise<PageResult<ZkProof>>;
 }
 
 // ---------- FirestoreStorage ----------
@@ -767,6 +826,118 @@ export class FirestoreStorage implements IStorage {
 
   async updateCredentialRequestOnChainTxHash(id: string, txHash: string): Promise<void> {
     await collections.credentialRequests.doc(id).update({ onChainTxHash: txHash });
+  }
+
+  // ----- paginated list implementations -----
+
+  async listIssuersPaged(opts?: PageOpts): Promise<PageResult<Issuer>> {
+    return paginateQuery(
+      collections.issuers.orderBy("approvedAt", "desc"),
+      collections.issuers,
+      opts,
+      (id, data) => issuerFromDoc(id, data),
+    );
+  }
+
+  async listCredentialsForHolderPaged(address: string, opts?: PageOpts): Promise<PageResult<Credential>> {
+    return paginateQuery(
+      collections.credentials
+        .where("holderAddress", "==", lc(address))
+        .orderBy("issuedAt", "desc"),
+      collections.credentials,
+      opts,
+      (id, data) => credentialFromDoc(id, data),
+    );
+  }
+
+  async listCredentialsByIssuerPaged(address: string, opts?: PageOpts): Promise<PageResult<Credential>> {
+    return paginateQuery(
+      collections.credentials
+        .where("issuerAddress", "==", lc(address))
+        .orderBy("issuedAt", "desc"),
+      collections.credentials,
+      opts,
+      (id, data) => credentialFromDoc(id, data),
+    );
+  }
+
+  async listAllCredentialsPaged(opts?: PageOpts): Promise<PageResult<Credential>> {
+    return paginateQuery(
+      collections.credentials.orderBy("issuedAt", "desc"),
+      collections.credentials,
+      opts,
+      (id, data) => credentialFromDoc(id, data),
+    );
+  }
+
+  async listTransactionsPaged(
+    address: string | undefined,
+    opts?: PageOpts,
+  ): Promise<PageResult<Transaction>> {
+    // "all transactions" case uses Firestore-native pagination.
+    if (!address) {
+      return paginateQuery(
+        collections.transactions.orderBy("timestamp", "desc"),
+        collections.transactions,
+        opts,
+        (id, data) => transactionFromDoc(id, data),
+      );
+    }
+    // Per-address requires merging two queries (from-address OR to-address),
+    // so we fall back to offset-style: fetch all then slice. The cursor we
+    // return is the next slice offset encoded as a string.
+    const all = await this.getTransactions(address);
+    const { limit } = normalizePage(opts);
+    const offset = opts?.cursor ? parseInt(opts.cursor, 10) || 0 : 0;
+    const items = all.slice(offset, offset + limit);
+    const nextCursor = offset + limit < all.length ? String(offset + limit) : null;
+    return { items, nextCursor };
+  }
+
+  async listCredentialRequestsByRequesterPaged(address: string, opts?: PageOpts): Promise<PageResult<CredentialRequest>> {
+    return paginateQuery(
+      collections.credentialRequests
+        .where("requesterAddress", "==", lc(address))
+        .orderBy("createdAt", "desc"),
+      collections.credentialRequests,
+      opts,
+      (id, data) => credentialRequestFromDoc(id, data),
+    );
+  }
+
+  async listCredentialRequestsForIssuerPaged(address: string, opts?: PageOpts): Promise<PageResult<CredentialRequest>> {
+    // Issuer sees both direct (issuerAddress = me) and pending-category requests.
+    // We merge in memory then offset-paginate — data volume per issuer is small.
+    const issuer = await this.getIssuerByAddress(address);
+    if (!issuer) return { items: [], nextCursor: null };
+
+    const [direct, categoryPending] = await Promise.all([
+      this.getCredentialRequestsForIssuer(issuer.walletAddress),
+      this.getPendingRequestsForCategory(issuer.category),
+    ]);
+    const seen = new Set<string>();
+    const merged: CredentialRequest[] = [];
+    for (const r of [...direct, ...categoryPending]) {
+      if (!seen.has(r.id)) { seen.add(r.id); merged.push(r); }
+    }
+    merged.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+
+    const { limit } = normalizePage(opts);
+    const offset = opts?.cursor ? parseInt(opts.cursor, 10) || 0 : 0;
+    const items = merged.slice(offset, offset + limit);
+    const nextCursor = offset + limit < merged.length ? String(offset + limit) : null;
+    return { items, nextCursor };
+  }
+
+  async listZkProofsByProverPaged(address: string, opts?: PageOpts): Promise<PageResult<ZkProof>> {
+    return paginateQuery(
+      collections.zkProofs
+        .where("proverAddress", "==", lc(address))
+        .orderBy("createdAt", "desc"),
+      collections.zkProofs,
+      opts,
+      (id, data) => zkProofFromDoc(id, data),
+    );
   }
 }
 

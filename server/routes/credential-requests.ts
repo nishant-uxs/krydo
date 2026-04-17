@@ -10,6 +10,7 @@ import {
 } from "../blockchain";
 import { requireAuth, requireRole } from "../auth/jwt";
 import { sensitiveLimiter } from "../middleware/security";
+import { readPageOpts, sendPage } from "../middleware/pagination";
 import { childLogger } from "../logger";
 
 const log = childLogger("routes/credential-requests");
@@ -82,8 +83,8 @@ export function registerCredentialRequestRoutes(app: Express) {
   app.get("/api/credential-requests/user/:address", async (req, res) => {
     try {
       const { address } = req.params;
-      const requests = await storage.getCredentialRequestsByRequester(address);
-      res.json(requests);
+      const page = await storage.listCredentialRequestsByRequesterPaged(address, readPageOpts(req));
+      sendPage(res, page);
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }
@@ -92,23 +93,8 @@ export function registerCredentialRequestRoutes(app: Express) {
   app.get("/api/credential-requests/issuer/:address", async (req, res) => {
     try {
       const { address } = req.params;
-      const issuer = await storage.getIssuerByAddress(address);
-      if (!issuer) return res.json([]);
-
-      const directRequests = await storage.getCredentialRequestsForIssuer(issuer.walletAddress);
-      const categoryRequests = await storage.getPendingRequestsForCategory(issuer.category);
-
-      const seen = new Set<string>();
-      const allRequests = [];
-      for (const r of [...directRequests, ...categoryRequests]) {
-        if (!seen.has(r.id)) {
-          seen.add(r.id);
-          allRequests.push(r);
-        }
-      }
-      allRequests.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-
-      res.json(allRequests);
+      const page = await storage.listCredentialRequestsForIssuerPaged(address, readPageOpts(req));
+      sendPage(res, page);
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }
