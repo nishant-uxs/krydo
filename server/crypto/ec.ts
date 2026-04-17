@@ -1,6 +1,6 @@
-import { secp256k1 } from "@noble/curves/secp256k1";
-import { sha256 as nobleSha256 } from "@noble/hashes/sha256";
-import { bytesToHex, hexToBytes, utf8ToBytes, concatBytes } from "@noble/hashes/utils";
+import { secp256k1 } from "@noble/curves/secp256k1.js";
+import { sha256 as nobleSha256 } from "@noble/hashes/sha2.js";
+import { bytesToHex, hexToBytes, utf8ToBytes, concatBytes } from "@noble/hashes/utils.js";
 
 /**
  * Low-level elliptic-curve primitives used by the Krydo ZK stack. We commit to
@@ -10,14 +10,14 @@ import { bytesToHex, hexToBytes, utf8ToBytes, concatBytes } from "@noble/hashes/
  * under the discrete-log assumption on secp256k1.
  */
 
-export const Point = secp256k1.ProjectivePoint;
+export const Point = secp256k1.Point;
 export type Point = InstanceType<typeof Point>;
 
 /** Curve order (scalar field modulus). */
-export const N = secp256k1.CURVE.n;
+export const N: bigint = (Point as any).Fn.ORDER;
 
 /** Standard generator. */
-export const G = Point.BASE;
+export const G: Point = Point.BASE;
 
 // ---------- hashing / Fiat-Shamir ----------
 
@@ -51,7 +51,7 @@ export function modN(x: bigint): bigint {
 /** Uniform random non-zero scalar in [1, N-1]. */
 export function randomScalar(): bigint {
   while (true) {
-    const bytes = secp256k1.utils.randomPrivateKey();
+    const bytes = secp256k1.utils.randomSecretKey();
     const x = BigInt("0x" + bytesToHex(bytes));
     if (x > 0n && x < N) return x;
   }
