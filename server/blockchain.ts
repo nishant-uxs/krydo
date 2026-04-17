@@ -1,11 +1,22 @@
 import { ethers } from "ethers";
-import fs from "fs";
-import path from "path";
+import {
+  DEPLOYMENT,
+  AUTHORITY_ADDRESS,
+  CREDENTIALS_ADDRESS,
+  AUTHORITY_ABI,
+  CREDENTIALS_ABI,
+  type DeploymentInfo,
+} from "@shared/contracts";
 
 /**
  * Thin wrapper around the Sepolia RPC. Every on-chain operation returns both
  * the transaction hash AND the real block number from the mined receipt so the
  * storage layer never has to fabricate placeholder values.
+ *
+ * Contract addresses + ABIs come from `@shared/contracts`, which is itself
+ * generated from `contracts/deployment.json` at build/startup time. The same
+ * constants are consumed by the React client so server and browser can never
+ * drift apart on which contract they're talking to.
  */
 
 export interface OnChainResult {
@@ -17,7 +28,7 @@ let provider: ethers.JsonRpcProvider;
 let wallet: ethers.Wallet;
 let authorityContract: ethers.Contract;
 let credentialsContract: ethers.Contract;
-let deployment: any;
+let deployment: DeploymentInfo | undefined;
 
 export function getProvider() {
   return provider;
@@ -48,13 +59,12 @@ export async function initBlockchain() {
     return false;
   }
 
-  const deploymentPath = path.resolve("contracts/deployment.json");
-  if (!fs.existsSync(deploymentPath)) {
-    console.warn("No deployment.json found. Running in off-chain mode.");
+  if (!AUTHORITY_ADDRESS || !CREDENTIALS_ADDRESS) {
+    console.warn("Shared deployment metadata is missing contract addresses. Off-chain mode.");
     return false;
   }
 
-  deployment = JSON.parse(fs.readFileSync(deploymentPath, "utf8"));
+  deployment = DEPLOYMENT;
 
   const rpcUrl = alchemyKey.startsWith("http")
     ? alchemyKey
@@ -63,20 +73,12 @@ export async function initBlockchain() {
   provider = new ethers.JsonRpcProvider(rpcUrl);
   wallet = new ethers.Wallet(privateKey, provider);
 
-  authorityContract = new ethers.Contract(
-    deployment.contracts.KrydoAuthority.address,
-    deployment.contracts.KrydoAuthority.abi,
-    wallet,
-  );
-  credentialsContract = new ethers.Contract(
-    deployment.contracts.KrydoCredentials.address,
-    deployment.contracts.KrydoCredentials.abi,
-    wallet,
-  );
+  authorityContract = new ethers.Contract(AUTHORITY_ADDRESS, AUTHORITY_ABI, wallet);
+  credentialsContract = new ethers.Contract(CREDENTIALS_ADDRESS, CREDENTIALS_ABI, wallet);
 
   console.log(`Blockchain initialized. Root: ${wallet.address}`);
-  console.log(`Authority contract: ${deployment.contracts.KrydoAuthority.address}`);
-  console.log(`Credentials contract: ${deployment.contracts.KrydoCredentials.address}`);
+  console.log(`Authority contract: ${AUTHORITY_ADDRESS}`);
+  console.log(`Credentials contract: ${CREDENTIALS_ADDRESS}`);
   return true;
 }
 

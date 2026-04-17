@@ -1,44 +1,29 @@
 import { ethers } from "ethers";
-
-const AUTHORITY_ADDRESS = "0x0BE4fE934Ff4e9B24186C1cdd0cdFe0594209821";
-const CREDENTIALS_ADDRESS = "0xEdb9EB8966053B5dc7C6ec17C65673D919Ea77Cb";
-const SEPOLIA_CHAIN_ID = "0xaa36a7";
-
-const AUTHORITY_ABI = [
-  "function addIssuer(address _issuer, string _name) external",
-  "function revokeIssuer(address _issuer) external",
-  "function isIssuer(address _addr) view returns (bool)",
-  "function rootAuthority() view returns (address)",
-];
-
-const CREDENTIALS_ABI = [
-  "function issueCredential(bytes32 _hash, address _holder, string _claimType, string _claimSummary) external",
-  "function revokeCredential(bytes32 _hash) external",
-  "function verifyCredential(bytes32 _hash) view returns (bool valid, address issuer, address holder, string claimType, string claimSummary, uint256 issuedAt, bool issuerActive)",
-];
+import {
+  AUTHORITY_ADDRESS,
+  CREDENTIALS_ADDRESS,
+  AUTHORITY_ABI,
+  CREDENTIALS_ABI,
+  SEPOLIA_CHAIN_ID_HEX,
+  SEPOLIA_NETWORK_CONFIG,
+} from "@shared/contracts";
 
 async function ensureSepoliaNetwork(): Promise<void> {
   if (!window.ethereum) throw new Error("MetaMask not found");
 
   const currentChainId = await window.ethereum.request({ method: "eth_chainId" });
-  if (currentChainId === SEPOLIA_CHAIN_ID) return;
+  if (currentChainId === SEPOLIA_CHAIN_ID_HEX) return;
 
   try {
     await window.ethereum.request({
       method: "wallet_switchEthereumChain",
-      params: [{ chainId: SEPOLIA_CHAIN_ID }],
+      params: [{ chainId: SEPOLIA_CHAIN_ID_HEX }],
     });
   } catch (switchError: any) {
     if (switchError.code === 4902) {
       await window.ethereum.request({
         method: "wallet_addEthereumChain",
-        params: [{
-          chainId: SEPOLIA_CHAIN_ID,
-          chainName: "Sepolia Testnet",
-          nativeCurrency: { name: "SepoliaETH", symbol: "ETH", decimals: 18 },
-          rpcUrls: ["https://rpc.sepolia.org"],
-          blockExplorerUrls: ["https://sepolia.etherscan.io"],
-        }],
+        params: [SEPOLIA_NETWORK_CONFIG],
       });
     } else {
       throw switchError;
