@@ -1,0 +1,15 @@
+node_modules
+dist
+.DS_Store
+server/public
+vite.config.ts.*
+*.tar.gz
+
+# env & secrets
+.env
+.env.*
+!.env.example
+
+# Firebase service-account credentials
+krydo-*firebase-adminsdk*.json
+*-firebase-adminsdk-*.json
