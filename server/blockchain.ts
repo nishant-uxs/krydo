@@ -2,6 +2,17 @@ import { ethers } from "ethers";
 import fs from "fs";
 import path from "path";
 
+/**
+ * Thin wrapper around the Sepolia RPC. Every on-chain operation returns both
+ * the transaction hash AND the real block number from the mined receipt so the
+ * storage layer never has to fabricate placeholder values.
+ */
+
+export interface OnChainResult {
+  txHash: string;
+  blockNumber: string;
+}
+
 let provider: ethers.JsonRpcProvider;
 let wallet: ethers.Wallet;
 let authorityContract: ethers.Contract;
@@ -55,61 +66,62 @@ export async function initBlockchain() {
   authorityContract = new ethers.Contract(
     deployment.contracts.KrydoAuthority.address,
     deployment.contracts.KrydoAuthority.abi,
-    wallet
+    wallet,
   );
-
   credentialsContract = new ethers.Contract(
     deployment.contracts.KrydoCredentials.address,
     deployment.contracts.KrydoCredentials.abi,
-    wallet
+    wallet,
   );
 
-  const rootAddr = await authorityContract.rootAuthority();
-  console.log(`Blockchain initialized. Root: ${rootAddr}`);
+  console.log(`Blockchain initialized. Root: ${wallet.address}`);
   console.log(`Authority contract: ${deployment.contracts.KrydoAuthority.address}`);
   console.log(`Credentials contract: ${deployment.contracts.KrydoCredentials.address}`);
-
   return true;
 }
 
-export async function addIssuerOnChain(issuerAddress: string, name: string): Promise<string> {
-  if (!authorityContract) throw new Error("Blockchain not initialized");
-  const tx = await authorityContract.addIssuer(issuerAddress, name);
-  const receipt = await tx.wait();
-  return receipt.hash;
+function resultOf(receipt: ethers.TransactionReceipt | null | undefined): OnChainResult {
+  if (!receipt) throw new Error("tx receipt missing");
+  return {
+    txHash: receipt.hash,
+    blockNumber: String(receipt.blockNumber),
+  };
 }
 
-export async function revokeIssuerOnChain(issuerAddress: string): Promise<string> {
+export async function addIssuerOnChain(address: string, name: string): Promise<OnChainResult> {
   if (!authorityContract) throw new Error("Blockchain not initialized");
-  const tx = await authorityContract.revokeIssuer(issuerAddress);
-  const receipt = await tx.wait();
-  return receipt.hash;
+  const tx = await authorityContract.addIssuer(address, name);
+  return resultOf(await tx.wait());
+}
+
+export async function revokeIssuerOnChain(address: string): Promise<OnChainResult> {
+  if (!authorityContract) throw new Error("Blockchain not initialized");
+  const tx = await authorityContract.revokeIssuer(address);
+  return resultOf(await tx.wait());
 }
 
 export async function issueCredentialOnChain(
   credentialHash: string,
   holderAddress: string,
   claimType: string,
-  claimSummary: string
-): Promise<string> {
+  claimSummary: string,
+): Promise<OnChainResult> {
   if (!credentialsContract) throw new Error("Blockchain not initialized");
   const hashBytes = ethers.zeroPadValue(credentialHash, 32);
   const tx = await credentialsContract.issueCredential(
     hashBytes,
     holderAddress,
     claimType,
-    claimSummary
+    claimSummary,
   );
-  const receipt = await tx.wait();
-  return receipt.hash;
+  return resultOf(await tx.wait());
 }
 
-export async function revokeCredentialOnChain(credentialHash: string): Promise<string> {
+export async function revokeCredentialOnChain(credentialHash: string): Promise<OnChainResult> {
   if (!credentialsContract) throw new Error("Blockchain not initialized");
   const hashBytes = ethers.zeroPadValue(credentialHash, 32);
   const tx = await credentialsContract.revokeCredential(hashBytes);
-  const receipt = await tx.wait();
-  return receipt.hash;
+  return resultOf(await tx.wait());
 }
 
 export async function verifyCredentialOnChain(credentialHash: string) {
@@ -127,42 +139,45 @@ export async function verifyCredentialOnChain(credentialHash: string) {
   };
 }
 
-export async function anchorZkProofOnChain(
-  proofCommitment: string,
-  credentialHash: string,
-  proofType: string,
-  proverAddress: string
-): Promise<string> {
+async function sendAnchor(data: string): Promise<OnChainResult> {
   if (!wallet || !provider) throw new Error("Blockchain not initialized");
-
-  const encoder = new ethers.AbiCoder();
-  const data = encoder.encode(
-    ["string", "bytes32", "bytes32", "string", "address"],
-    [
-      "KRYDO_ZK_PROOF_V1",
-      ethers.zeroPadValue(proofCommitment, 32),
-      ethers.zeroPadValue(credentialHash, 32),
-      proofType,
-      proverAddress,
-    ]
-  );
-
   const tx = await wallet.sendTransaction({
     to: wallet.address,
     data,
     value: 0,
   });
-  const receipt = await tx.wait();
-  return receipt!.hash;
+  return resultOf(await tx.wait());
+}
+
+export async function anchorZkProofOnChain(
+  proofCommitment: string,
+  credentialHash: string,
+  proofType: string,
+  proverAddress: string,
+): Promise<OnChainResult> {
+  const encoder = new ethers.AbiCoder();
+  // proofCommitment is a secp256k1 compressed point (33 bytes / 66 hex) — encode as bytes.
+  const commitmentBytes = proofCommitment.startsWith("0x")
+    ? proofCommitment
+    : "0x" + proofCommitment;
+  const data = encoder.encode(
+    ["string", "bytes", "bytes32", "string", "address"],
+    [
+      "KRYDO_ZK_PROOF_V2",
+      commitmentBytes,
+      ethers.zeroPadValue(credentialHash, 32),
+      proofType,
+      proverAddress,
+    ],
+  );
+  return sendAnchor(data);
 }
 
 export async function anchorRoleAssignmentOnChain(
   walletAddress: string,
   role: string,
-  label: string
-): Promise<string> {
-  if (!wallet || !provider) throw new Error("Blockchain not initialized");
-
+  label: string,
+): Promise<OnChainResult> {
   const encoder = new ethers.AbiCoder();
   const data = encoder.encode(
     ["string", "address", "string", "string", "uint256"],
@@ -172,26 +187,17 @@ export async function anchorRoleAssignmentOnChain(
       role,
       label,
       Math.floor(Date.now() / 1000),
-    ]
+    ],
   );
-
-  const tx = await wallet.sendTransaction({
-    to: wallet.address,
-    data,
-    value: 0,
-  });
-  const receipt = await tx.wait();
-  return receipt!.hash;
+  return sendAnchor(data);
 }
 
 export async function anchorCredentialRequestOnChain(
   requestId: string,
   requesterAddress: string,
   claimType: string,
-  action: string
-): Promise<string> {
-  if (!wallet || !provider) throw new Error("Blockchain not initialized");
-
+  action: string,
+): Promise<OnChainResult> {
   const encoder = new ethers.AbiCoder();
   const data = encoder.encode(
     ["string", "string", "address", "string", "string", "uint256"],
@@ -202,25 +208,16 @@ export async function anchorCredentialRequestOnChain(
       claimType,
       action,
       Math.floor(Date.now() / 1000),
-    ]
+    ],
   );
-
-  const tx = await wallet.sendTransaction({
-    to: wallet.address,
-    data,
-    value: 0,
-  });
-  const receipt = await tx.wait();
-  return receipt!.hash;
+  return sendAnchor(data);
 }
 
 export async function anchorCredentialRenewalOnChain(
   credentialHash: string,
   holderAddress: string,
-  newExpiresAt: number
-): Promise<string> {
-  if (!wallet || !provider) throw new Error("Blockchain not initialized");
-
+  newExpiresAt: number,
+): Promise<OnChainResult> {
   const encoder = new ethers.AbiCoder();
   const data = encoder.encode(
     ["string", "bytes32", "address", "uint256", "uint256"],
@@ -230,16 +227,9 @@ export async function anchorCredentialRenewalOnChain(
       holderAddress,
       newExpiresAt,
       Math.floor(Date.now() / 1000),
-    ]
+    ],
   );
-
-  const tx = await wallet.sendTransaction({
-    to: wallet.address,
-    data,
-    value: 0,
-  });
-  const receipt = await tx.wait();
-  return receipt!.hash;
+  return sendAnchor(data);
 }
 
 export async function isIssuerOnChain(address: string): Promise<boolean> {

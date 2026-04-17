@@ -79,8 +79,16 @@ export function registerAuthRoutes(app: Express) {
       // Best-effort anchor of the role assignment on Sepolia.
       if (isBlockchainReady()) {
         try {
-          const roleTxHash = await anchorRoleAssignmentOnChain(addr, role, label);
-          await storage.updateWalletOnChainTxHash(addr, roleTxHash);
+          const { txHash, blockNumber } = await anchorRoleAssignmentOnChain(addr, role, label);
+          await storage.updateWalletOnChainTxHash(addr, txHash);
+          // Log a transaction row so the dashboard can show a real block number.
+          await storage.createTransaction({
+            txHash,
+            action: "role_assigned_onchain",
+            fromAddress: addr,
+            data: { role, label, onChain: true },
+            blockNumber,
+          });
         } catch (err: any) {
           // eslint-disable-next-line no-console
           console.error("Role anchor failed:", err.message);

@@ -20,10 +20,12 @@ function generateCredentialHash(data: object): string {
   return "0x" + crypto.createHash("sha256").update(JSON.stringify(data) + Date.now()).digest("hex");
 }
 
-let blockCounter = 1000;
-function nextBlock(): string {
-  return String(++blockCounter);
-}
+/**
+ * Block number placeholder for transaction rows that are not (yet) anchored
+ * on-chain. When a real block number is known it is filled in via
+ * `updateTransactionOnChain`.
+ */
+const NO_BLOCK = "0";
 
 function newId(): string {
   return crypto.randomUUID();
@@ -158,6 +160,7 @@ export interface IStorage {
   revokeCredential(id: string, revokedBy: string): Promise<{ credential: Credential; tx: Transaction }>;
 
   updateTransactionTxHash(id: string, txHash: string): Promise<void>;
+  updateTransactionOnChain(id: string, txHash: string, blockNumber: string): Promise<void>;
   createTransaction(data: InsertTransaction): Promise<Transaction>;
   getTransactions(address?: string): Promise<Transaction[]>;
   getRecentTransactions(address?: string, limit?: number): Promise<Transaction[]>;
@@ -250,7 +253,7 @@ export class FirestoreStorage implements IStorage {
       fromAddress: normalized,
       toAddress: null,
       data: { role },
-      blockNumber: nextBlock(),
+      blockNumber: NO_BLOCK,
       timestamp: new Date(),
     });
 
@@ -317,7 +320,7 @@ export class FirestoreStorage implements IStorage {
       fromAddress: approvedBy,
       toAddress: walletAddress,
       data: { issuerName: data.name, issuerId: id, onChain: !!onChainTxHash },
-      blockNumber: nextBlock(),
+      blockNumber: NO_BLOCK,
       timestamp: new Date(),
     };
     await collections.transactions.doc(txId).set(txPayload);
@@ -356,7 +359,7 @@ export class FirestoreStorage implements IStorage {
       fromAddress: approvedByLc,
       toAddress: issuer.walletAddress,
       data: { issuerName: name, issuerId: id, onChain: !!onChainTxHash, reactivated: true },
-      blockNumber: nextBlock(),
+      blockNumber: NO_BLOCK,
       timestamp: new Date(),
     };
     await collections.transactions.doc(txId).set(txPayload);
@@ -379,7 +382,7 @@ export class FirestoreStorage implements IStorage {
       fromAddress: lc(revokedBy),
       toAddress: issuer.walletAddress,
       data: { issuerName: issuer.name, issuerId: id, onChain: !!onChainTxHash },
-      blockNumber: nextBlock(),
+      blockNumber: NO_BLOCK,
       timestamp: new Date(),
     };
     await collections.transactions.doc(txId).set(txPayload);
@@ -472,7 +475,7 @@ export class FirestoreStorage implements IStorage {
       fromAddress: issuerAddress,
       toAddress: holderAddress,
       data: { credentialHash: credHash, claimType: data.claimType },
-      blockNumber: nextBlock(),
+      blockNumber: NO_BLOCK,
       timestamp: new Date(),
     };
     await collections.transactions.doc(txId).set(txPayload);
@@ -498,7 +501,7 @@ export class FirestoreStorage implements IStorage {
       fromAddress: lc(revokedBy),
       toAddress: credential.holderAddress,
       data: { credentialHash: credential.credentialHash, claimType: credential.claimType },
-      blockNumber: nextBlock(),
+      blockNumber: NO_BLOCK,
       timestamp: new Date(),
     };
     await collections.transactions.doc(txId).set(txPayload);
@@ -520,6 +523,11 @@ export class FirestoreStorage implements IStorage {
 
   async updateTransactionTxHash(id: string, txHash: string): Promise<void> {
     await collections.transactions.doc(id).update({ txHash });
+  }
+
+  /** Update both tx hash and real block number once the on-chain receipt is in. */
+  async updateTransactionOnChain(id: string, txHash: string, blockNumber: string): Promise<void> {
+    await collections.transactions.doc(id).update({ txHash, blockNumber });
   }
 
   async createTransaction(data: InsertTransaction): Promise<Transaction> {

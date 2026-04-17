@@ -82,10 +82,13 @@ export async function registerRoutes(
       }
 
       let onChainTxHash: string | null = clientTxHash || null;
+      let onChainBlockNumber: string | null = null;
       if (!onChainTxHash && isBlockchainReady()) {
         try {
-          onChainTxHash = await addIssuerOnChain(data.walletAddress, data.name);
-          console.log(`Issuer added on-chain (server): ${onChainTxHash}`);
+          const res = await addIssuerOnChain(data.walletAddress, data.name);
+          onChainTxHash = res.txHash;
+          onChainBlockNumber = res.blockNumber;
+          console.log(`Issuer added on-chain (server): ${res.txHash} @ block ${res.blockNumber}`);
         } catch (err: any) {
           console.error("On-chain addIssuer failed:", err.message);
           return res.status(500).json({ message: `On-chain transaction failed: ${err.reason || err.message}` });
@@ -96,13 +99,17 @@ export async function registerRoutes(
         console.log(`Issuer added on-chain (MetaMask): ${clientTxHash}`);
       }
 
-      if (existing && !existing.active) {
-        const result = await storage.reactivateIssuer(existing.id, data.name, data.description || "", data.approvedBy, onChainTxHash, data.category);
-        res.json({ ...result.issuer, txHash: result.tx.txHash, blockNumber: result.tx.blockNumber });
-      } else {
-        const result = await storage.createIssuer(data, onChainTxHash);
-        res.json({ ...result.issuer, txHash: result.tx.txHash, blockNumber: result.tx.blockNumber });
+      const result = existing && !existing.active
+        ? await storage.reactivateIssuer(existing.id, data.name, data.description || "", data.approvedBy, onChainTxHash, data.category)
+        : await storage.createIssuer(data, onChainTxHash);
+      if (onChainTxHash && onChainBlockNumber) {
+        await storage.updateTransactionOnChain(result.tx.id, onChainTxHash, onChainBlockNumber);
       }
+      res.json({
+        ...result.issuer,
+        txHash: onChainTxHash || result.tx.txHash,
+        blockNumber: onChainBlockNumber || result.tx.blockNumber,
+      });
     } catch (error: any) {
       if (error instanceof z.ZodError) {
         return res.status(400).json({ message: error.errors[0].message });
@@ -128,10 +135,13 @@ export async function registerRoutes(
       }
 
       let onChainTxHash: string | null = clientTxHash || null;
+      let onChainBlockNumber: string | null = null;
       if (!onChainTxHash && isBlockchainReady()) {
         try {
-          onChainTxHash = await revokeIssuerOnChain(issuer.walletAddress);
-          console.log(`Issuer revoked on-chain (server): ${onChainTxHash}`);
+          const res = await revokeIssuerOnChain(issuer.walletAddress);
+          onChainTxHash = res.txHash;
+          onChainBlockNumber = res.blockNumber;
+          console.log(`Issuer revoked on-chain (server): ${res.txHash} @ block ${res.blockNumber}`);
         } catch (err: any) {
           console.error("On-chain revokeIssuer failed:", err.message);
           return res.status(500).json({ message: `On-chain transaction failed: ${err.reason || err.message}` });
@@ -143,7 +153,14 @@ export async function registerRoutes(
       }
 
       const result = await storage.revokeIssuer(id, revokedBy, onChainTxHash);
-      res.json({ ...result.issuer, txHash: result.tx.txHash, blockNumber: result.tx.blockNumber });
+      if (onChainTxHash && onChainBlockNumber) {
+        await storage.updateTransactionOnChain(result.tx.id, onChainTxHash, onChainBlockNumber);
+      }
+      res.json({
+        ...result.issuer,
+        txHash: onChainTxHash || result.tx.txHash,
+        blockNumber: onChainBlockNumber || result.tx.blockNumber,
+      });
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }
@@ -197,26 +214,30 @@ export async function registerRoutes(
 
       const result = await storage.createCredential(data);
 
+      let finalTxHash: string = result.tx.txHash;
+      let finalBlockNumber: string = result.tx.blockNumber;
       if (clientTxHash) {
         console.log(`Credential issued on-chain (MetaMask): ${clientTxHash}`);
         await storage.updateTransactionTxHash(result.tx.id, clientTxHash);
+        finalTxHash = clientTxHash;
       } else if (isBlockchainReady()) {
         try {
-          const onChainTxHash = await issueCredentialOnChain(
+          const { txHash, blockNumber } = await issueCredentialOnChain(
             result.credential.credentialHash,
             data.holderAddress,
             data.claimType,
-            data.claimSummary
+            data.claimSummary,
           );
-          console.log(`Credential issued on-chain (server): ${onChainTxHash}`);
-          await storage.updateTransactionTxHash(result.tx.id, onChainTxHash);
+          console.log(`Credential issued on-chain (server): ${txHash} @ block ${blockNumber}`);
+          await storage.updateTransactionOnChain(result.tx.id, txHash, blockNumber);
+          finalTxHash = txHash;
+          finalBlockNumber = blockNumber;
         } catch (err: any) {
           console.error("On-chain issueCredential failed:", err.message);
         }
       }
 
-      const updatedTxHash = clientTxHash || result.tx.txHash;
-      res.json({ ...result.credential, txHash: updatedTxHash, blockNumber: result.tx.blockNumber });
+      res.json({ ...result.credential, txHash: finalTxHash, blockNumber: finalBlockNumber });
     } catch (error: any) {
       if (error instanceof z.ZodError) {
         return res.status(400).json({ message: error.errors[0].message });
@@ -269,10 +290,14 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Credential is already revoked" });
       }
 
+      let chainTx: string | null = clientTxHash || null;
+      let chainBlock: string | null = null;
       if (!clientTxHash && isBlockchainReady()) {
         try {
-          const onChainTxHash = await revokeCredentialOnChain(credential.credentialHash);
-          console.log(`Credential revoked on-chain (server): ${onChainTxHash}`);
+          const res = await revokeCredentialOnChain(credential.credentialHash);
+          console.log(`Credential revoked on-chain (server): ${res.txHash} @ block ${res.blockNumber}`);
+          chainTx = res.txHash;
+          chainBlock = res.blockNumber;
         } catch (err: any) {
           console.error("On-chain revokeCredential failed:", err.message);
         }
@@ -283,7 +308,16 @@ export async function registerRoutes(
       }
 
       const result = await storage.revokeCredential(id, revokedBy);
-      res.json({ ...result.credential, txHash: clientTxHash || result.tx.txHash, blockNumber: result.tx.blockNumber });
+      if (chainTx && chainBlock) {
+        await storage.updateTransactionOnChain(result.tx.id, chainTx, chainBlock);
+      } else if (chainTx) {
+        await storage.updateTransactionTxHash(result.tx.id, chainTx);
+      }
+      res.json({
+        ...result.credential,
+        txHash: chainTx || result.tx.txHash,
+        blockNumber: chainBlock || result.tx.blockNumber,
+      });
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }
@@ -415,15 +449,18 @@ export async function registerRoutes(
       const request = await storage.createCredentialRequest(data);
 
       let onChainTxHash: string | null = null;
+      let onChainBlockNumber: string | null = null;
       if (isBlockchainReady()) {
         try {
-          onChainTxHash = await anchorCredentialRequestOnChain(
+          const res = await anchorCredentialRequestOnChain(
             request.id,
             data.requesterAddress,
             data.claimType,
-            "request_created"
+            "request_created",
           );
-          console.log(`Credential request anchored on-chain: ${onChainTxHash}`);
+          onChainTxHash = res.txHash;
+          onChainBlockNumber = res.blockNumber;
+          console.log(`Credential request anchored on-chain: ${res.txHash} @ block ${res.blockNumber}`);
         } catch (err: any) {
           console.error("Credential request on-chain anchoring failed:", err.message);
         }
@@ -440,7 +477,7 @@ export async function registerRoutes(
           issuerCategory: data.issuerCategory || null,
           onChain: !!onChainTxHash,
         },
-        blockNumber: String(1000 + Math.floor(Math.random() * 1000)),
+        blockNumber: onChainBlockNumber || "0",
       });
 
       if (onChainTxHash) {
@@ -531,18 +568,18 @@ export async function registerRoutes(
 
         if (isBlockchainReady()) {
           try {
-            const rejectTxHash = await anchorCredentialRequestOnChain(
-              id, request.requesterAddress, request.claimType, "rejected"
+            const rejectRes = await anchorCredentialRequestOnChain(
+              id, request.requesterAddress, request.claimType, "rejected",
             );
-            console.log(`Request rejection anchored on-chain: ${rejectTxHash}`);
-            await storage.updateCredentialRequestOnChainTxHash(id, rejectTxHash);
+            console.log(`Request rejection anchored on-chain: ${rejectRes.txHash} @ block ${rejectRes.blockNumber}`);
+            await storage.updateCredentialRequestOnChainTxHash(id, rejectRes.txHash);
             await storage.createTransaction({
-              txHash: rejectTxHash,
+              txHash: rejectRes.txHash,
               action: "credential_request_rejected_onchain",
               fromAddress: respondedBy,
               toAddress: request.requesterAddress,
               data: { requestId: id, claimType: request.claimType, onChain: true },
-              blockNumber: String(1000 + Math.floor(Math.random() * 1000)),
+              blockNumber: rejectRes.blockNumber,
             });
           } catch (err: any) {
             console.error("Request rejection on-chain anchoring failed:", err.message);
@@ -588,13 +625,13 @@ export async function registerRoutes(
         await storage.updateTransactionTxHash(result.tx.id, onChainTxHash);
       } else if (isBlockchainReady()) {
         try {
-          const txHash = await issueCredentialOnChain(
+          const issueRes = await issueCredentialOnChain(
             result.credential.credentialHash,
             request.requesterAddress,
             request.claimType,
-            claimSummary.trim()
+            claimSummary.trim(),
           );
-          await storage.updateTransactionTxHash(result.tx.id, txHash);
+          await storage.updateTransactionOnChain(result.tx.id, issueRes.txHash, issueRes.blockNumber);
         } catch (err: any) {
           console.error("On-chain issueCredential failed:", err.message);
         }
@@ -602,18 +639,18 @@ export async function registerRoutes(
 
       if (isBlockchainReady()) {
         try {
-          const approveTxHash = await anchorCredentialRequestOnChain(
-            id, request.requesterAddress, request.claimType, "approved_and_issued"
+          const approveRes = await anchorCredentialRequestOnChain(
+            id, request.requesterAddress, request.claimType, "approved_and_issued",
           );
-          console.log(`Request approval anchored on-chain: ${approveTxHash}`);
-          await storage.updateCredentialRequestOnChainTxHash(id, approveTxHash);
+          console.log(`Request approval anchored on-chain: ${approveRes.txHash} @ block ${approveRes.blockNumber}`);
+          await storage.updateCredentialRequestOnChainTxHash(id, approveRes.txHash);
           await storage.createTransaction({
-            txHash: approveTxHash,
+            txHash: approveRes.txHash,
             action: "credential_request_approved_onchain",
             fromAddress: respondedBy,
             toAddress: request.requesterAddress,
             data: { requestId: id, claimType: request.claimType, credentialId: result.credential.id, onChain: true },
-            blockNumber: String(1000 + Math.floor(Math.random() * 1000)),
+            blockNumber: approveRes.blockNumber,
           });
         } catch (err: any) {
           console.error("Request approval on-chain anchoring failed:", err.message);
@@ -653,14 +690,17 @@ export async function registerRoutes(
       const renewed = await storage.renewCredential(id, newExpiry);
 
       let onChainTxHash: string | null = null;
+      let onChainBlockNumber: string | null = null;
       if (isBlockchainReady()) {
         try {
-          onChainTxHash = await anchorCredentialRenewalOnChain(
+          const r = await anchorCredentialRenewalOnChain(
             credential.credentialHash,
             credential.holderAddress,
-            Math.floor(newExpiry.getTime() / 1000)
+            Math.floor(newExpiry.getTime() / 1000),
           );
-          console.log(`Credential renewal anchored on-chain: ${onChainTxHash}`);
+          onChainTxHash = r.txHash;
+          onChainBlockNumber = r.blockNumber;
+          console.log(`Credential renewal anchored on-chain: ${r.txHash} @ block ${r.blockNumber}`);
         } catch (err: any) {
           console.error("Credential renewal on-chain anchoring failed:", err.message);
         }
@@ -677,7 +717,7 @@ export async function registerRoutes(
           newExpiresAt: newExpiry.toISOString(),
           onChain: !!onChainTxHash,
         },
-        blockNumber: String(1000 + Math.floor(Math.random() * 1000)),
+        blockNumber: onChainBlockNumber || "0",
       });
 
       res.json({ ...renewed, onChainTxHash });
@@ -748,16 +788,19 @@ export async function registerRoutes(
       });
 
       let onChainTxHash: string | null = null;
+      let onChainBlockNumber: string | null = null;
       if (isBlockchainReady()) {
         try {
-          onChainTxHash = await anchorZkProofOnChain(
+          const r = await anchorZkProofOnChain(
             proof.commitment,
             credential.credentialHash,
             data.proofType,
-            data.proverAddress
+            data.proverAddress,
           );
-          await storage.updateZkProofOnChain(stored.id, onChainTxHash);
-          console.log(`ZK proof anchored on-chain: ${onChainTxHash}`);
+          onChainTxHash = r.txHash;
+          onChainBlockNumber = r.blockNumber;
+          await storage.updateZkProofOnChain(stored.id, r.txHash);
+          console.log(`ZK proof anchored on-chain: ${r.txHash} @ block ${r.blockNumber}`);
         } catch (err: any) {
           console.error("ZK proof on-chain anchoring failed:", err.message);
           await storage.markZkProofOnChainFailed(stored.id);
@@ -776,7 +819,7 @@ export async function registerRoutes(
           commitment: proof.commitment,
           onChain: !!onChainTxHash,
         },
-        blockNumber: String(1000 + Math.floor(Math.random() * 1000)),
+        blockNumber: onChainBlockNumber || "0",
       });
 
       res.json({
