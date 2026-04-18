@@ -19,3 +19,4 @@ krydo-*firebase-adminsdk*.json
 
 # Internal / working-doc only, never ship to GitHub
 ROADMAP.md
+papers/
