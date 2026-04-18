@@ -139,19 +139,17 @@ function zkProofFromDoc(id: string, data: any): ZkProof {
 
 // ---------- pagination ----------
 
-export const DEFAULT_PAGE_LIMIT = 50;
-export const MAX_PAGE_LIMIT = 200;
+// The types live in middleware/pagination.ts so they're importable without
+// pulling Firebase in transitively.
+import {
+  DEFAULT_PAGE_LIMIT,
+  MAX_PAGE_LIMIT,
+  type PageOpts,
+  type PageResult,
+} from "./middleware/pagination";
 
-/** Client-supplied pagination hint. Cursor is an opaque doc id. */
-export interface PageOpts {
-  limit?: number;
-  cursor?: string | null;
-}
-
-export interface PageResult<T> {
-  items: T[];
-  nextCursor: string | null;
-}
+export { DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT };
+export type { PageOpts, PageResult };
 
 /** Clamp + normalize an incoming PageOpts. */
 function normalizePage(opts?: PageOpts): { limit: number; cursor: string | null } {

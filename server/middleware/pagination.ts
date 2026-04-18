@@ -1,6 +1,24 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
-import { DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT, type PageOpts, type PageResult } from "../storage";
+
+/**
+ * Pagination contract shared by storage + middleware. Defining it here rather
+ * than in storage.ts keeps this module importable from tests (and any other
+ * code path) without pulling the whole Firebase Admin SDK in transitively.
+ */
+export const DEFAULT_PAGE_LIMIT = 50;
+export const MAX_PAGE_LIMIT = 200;
+
+/** Client-supplied pagination hint. Cursor is an opaque doc id. */
+export interface PageOpts {
+  limit?: number;
+  cursor?: string | null;
+}
+
+export interface PageResult<T> {
+  items: T[];
+  nextCursor: string | null;
+}
 
 /** Zod schema for `?limit=&cursor=` query params. */
 const pageQuerySchema = z.object({
@@ -15,9 +33,12 @@ const pageQuerySchema = z.object({
 export function readPageOpts(req: Request): PageOpts {
   const parsed = pageQuerySchema.safeParse(req.query);
   if (!parsed.success) {
-    return { limit: DEFAULT_PAGE_LIMIT };
+    return { limit: DEFAULT_PAGE_LIMIT, cursor: null };
   }
-  return { limit: parsed.data.limit, cursor: parsed.data.cursor ?? null };
+  return {
+    limit: parsed.data.limit ?? DEFAULT_PAGE_LIMIT,
+    cursor: parsed.data.cursor ?? null,
+  };
 }
 
 /**
