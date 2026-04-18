@@ -10,6 +10,7 @@ import {
   revokeCredentialOnChain,
   verifyCredentialOnChain,
   anchorCredentialRenewalOnChain,
+  waitForClientTx,
   isBlockchainReady,
 } from "../blockchain";
 import { requireAuth, requireRole } from "../auth/jwt";
@@ -158,23 +159,169 @@ export function registerCredentialRoutes(app: Express) {
     },
   );
 
-  app.patch("/api/credentials/:id/tx", async (req, res) => {
+  /**
+   * Record a MetaMask-signed tx hash against a credential and — crucially —
+   * verify it against Sepolia before persisting. The previous implementation
+   * blindly trusted whatever hex the client sent, which meant a dropped /
+   * wrong-chain / reverted tx would still surface as "on-chain" in the UI.
+   *
+   * Guards:
+   *   - requireAuth: only the authenticated wallet (the issuer) can update
+   *     their own credentials.
+   *   - hash must match the issuer/root who owns the credential.
+   *   - blockchain must be configured; we cannot confirm otherwise.
+   *   - waitForClientTx must return "confirmed" before we mark the tx row
+   *     as anchored (we store the real blockNumber too). Reverted / unknown
+   *     hashes are reported back to the client with HTTP 422 so the UI can
+   *     prompt the user to retry instead of silently succeeding.
+   */
+  app.patch("/api/credentials/:id/tx", requireAuth, async (req, res) => {
     try {
-      const { id } = req.params;
-      const { txHash } = req.body;
-      if (!txHash) return res.status(400).json({ message: "txHash is required" });
+      const id = req.params.id as string;
+      const { txHash } = req.body ?? {};
+      if (!txHash || typeof txHash !== "string") {
+        return res.status(400).json({ message: "txHash is required" });
+      }
+      if (!/^0x[0-9a-f]{64}$/i.test(txHash)) {
+        return res.status(400).json({ message: "txHash is not a valid Ethereum transaction hash" });
+      }
 
       const credential = await storage.getCredentialById(id);
       if (!credential) return res.status(404).json({ message: "Credential not found" });
 
+      // Lock this endpoint to the issuer (or the root authority) — the
+      // holder shouldn't be able to rewrite an issuer's on-chain record.
+      const caller = req.auth!.sub.toLowerCase();
+      const isIssuer = credential.issuerAddress.toLowerCase() === caller;
+      const isRoot = req.auth!.role === "root";
+      if (!isIssuer && !isRoot) {
+        return res
+          .status(403)
+          .json({ message: "Only the credential issuer can record its on-chain tx" });
+      }
+
+      if (!isBlockchainReady()) {
+        return res
+          .status(503)
+          .json({ message: "Blockchain provider not configured on this server" });
+      }
+
+      // Fetch the matching transaction row. We need its id to update block
+      // number once the Sepolia receipt lands.
       const txs = await storage.getTransactions(credential.issuerAddress);
       const credTx = txs.find((t) => t.data && (t.data as any).credentialId === id);
-      if (credTx) {
-        await storage.updateTransactionTxHash(credTx.id, txHash);
-        log.info({ txHash, credTxId: credTx.id }, "credential tx updated (MetaMask)");
+      if (!credTx) {
+        return res
+          .status(404)
+          .json({ message: "No transaction row exists for this credential" });
       }
-      res.json({ success: true, txHash });
+
+      const result = await waitForClientTx(txHash, { timeoutMs: 45_000 });
+      if (result.status === "unknown") {
+        return res.status(422).json({
+          message:
+            "Transaction not found on Sepolia. Please retry signing — your wallet may be on a different chain.",
+          status: result.status,
+        });
+      }
+      if (result.status === "reverted") {
+        return res.status(422).json({
+          message:
+            "Transaction was mined but reverted. The credential was not anchored on-chain.",
+          status: result.status,
+          blockNumber: result.blockNumber,
+        });
+      }
+      if (result.status === "pending") {
+        // Record the hash anyway so the UI can show a 'pending' state;
+        // we deliberately do NOT set blockNumber yet so other endpoints
+        // continue treating the credential as unanchored until confirmation.
+        await storage.updateTransactionTxHash(credTx.id, txHash);
+        log.info({ txHash, credTxId: credTx.id }, "credential tx pending on-chain");
+        return res.json({ success: true, txHash, status: "pending" });
+      }
+
+      // status === "confirmed"
+      await storage.updateTransactionOnChain(credTx.id, txHash, result.blockNumber);
+      log.info(
+        { txHash, blockNumber: result.blockNumber, credTxId: credTx.id },
+        "credential tx confirmed on-chain (MetaMask)",
+      );
+      res.json({
+        success: true,
+        txHash,
+        blockNumber: result.blockNumber,
+        status: "confirmed",
+      });
     } catch (error: any) {
+      log.error({ err: error.message }, "failed to record credential tx");
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  /**
+   * Server-initiated on-chain anchor for a credential that was saved to
+   * Firestore but never confirmed on Sepolia (e.g. the user's browser died
+   * between `storage.createCredential` and the MetaMask signature). Acts as
+   * a "retry" button: we sign + submit from the root wallet on behalf of
+   * the issuer, then update the tx row with the real hash + block.
+   *
+   * Caller must be the issuer of the credential (or root). Idempotent:
+   * if the credential is already confirmed on-chain per verifyCredential,
+   * we no-op and return the existing on-chain state.
+   */
+  app.post("/api/credentials/:id/anchor", requireAuth, sensitiveLimiter, async (req, res) => {
+    try {
+      const id = req.params.id as string;
+      const credential = await storage.getCredentialById(id);
+      if (!credential) return res.status(404).json({ message: "Credential not found" });
+
+      const caller = req.auth!.sub.toLowerCase();
+      const isIssuer = credential.issuerAddress.toLowerCase() === caller;
+      const isRoot = req.auth!.role === "root";
+      if (!isIssuer && !isRoot) {
+        return res
+          .status(403)
+          .json({ message: "Only the credential issuer can anchor it on-chain" });
+      }
+
+      if (!isBlockchainReady()) {
+        return res
+          .status(503)
+          .json({ message: "Blockchain provider not configured on this server" });
+      }
+
+      // Idempotency check — don't pay gas twice for the same anchor.
+      const onChain = await verifyCredentialOnChain(credential.credentialHash);
+      if (
+        onChain.valid &&
+        onChain.holder.toLowerCase() === credential.holderAddress.toLowerCase()
+      ) {
+        return res.json({
+          success: true,
+          alreadyOnChain: true,
+          message: "Credential is already anchored on-chain",
+        });
+      }
+
+      const txs = await storage.getTransactions(credential.issuerAddress);
+      const credTx = txs.find((t) => t.data && (t.data as any).credentialId === id);
+
+      const { txHash, blockNumber } = await issueCredentialOnChain(
+        credential.credentialHash,
+        credential.holderAddress,
+        credential.claimType,
+        credential.claimSummary,
+      );
+      log.info({ txHash, blockNumber, credentialId: id }, "credential re-anchored on-chain (server)");
+
+      if (credTx) {
+        await storage.updateTransactionOnChain(credTx.id, txHash, blockNumber);
+      }
+
+      res.json({ success: true, txHash, blockNumber, status: "confirmed" });
+    } catch (error: any) {
+      log.error({ err: error.message }, "server-side credential anchor failed");
       res.status(500).json({ message: error.message });
     }
   });

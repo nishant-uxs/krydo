@@ -15,7 +15,8 @@ import { Shield, Clock, Hash, User, Building, QrCode, AlertTriangle, CalendarClo
 import type { Credential } from "@shared/schema";
 import { claimTypeLabels, type ClaimType } from "@shared/schema";
 import { motion } from "framer-motion";
-import { useState, useEffect, useRef } from "react";
+import { useState } from "react";
+import { QrCodeCanvas } from "@/components/qr-code-canvas";
 
 function getExpiryStatus(cred: Credential): { label: string; color: string; icon: typeof Clock } | null {
   if (!cred.expiresAt) return null;
@@ -25,19 +26,6 @@ function getExpiryStatus(cred: Credential): { label: string; color: string; icon
   if (daysLeft <= 0) return { label: "Expired", color: "bg-destructive/15 text-destructive", icon: AlertTriangle };
   if (daysLeft <= 30) return { label: `Expires in ${daysLeft}d`, color: "bg-chart-4/15 text-chart-4", icon: CalendarClock };
   return { label: `Expires ${exp.toLocaleDateString()}`, color: "bg-muted text-muted-foreground", icon: CalendarClock };
-}
-
-function QrCodeCanvas({ value }: { value: string }) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  useEffect(() => {
-    let cancelled = false;
-    import("qrcode").then((QRCode) => {
-      if (cancelled || !canvasRef.current) return;
-      QRCode.toCanvas(canvasRef.current, value, { width: 200, margin: 2 });
-    });
-    return () => { cancelled = true; };
-  }, [value]);
-  return <canvas ref={canvasRef} />;
 }
 
 export default function CredentialsPage() {

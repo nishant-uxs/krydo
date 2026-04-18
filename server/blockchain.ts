@@ -141,6 +141,64 @@ export async function verifyCredentialOnChain(credentialHash: string) {
   };
 }
 
+/**
+ * Fetch the receipt for a client-submitted tx hash. Used by the PATCH
+ * /api/credentials/:id/tx flow: the user's MetaMask broadcasts the issuance
+ * tx and reports the hash to us, but we can't trust that blindly — if the
+ * tx was sent to the wrong chain, reverted, or dropped from the mempool, we
+ * must not record it as a confirmed anchor.
+ *
+ * Returns:
+ *   { status: "confirmed", blockNumber } — tx is on-chain AND succeeded
+ *   { status: "reverted", blockNumber }  — tx is on-chain but reverted
+ *   { status: "pending" }                 — tx is known to the node but not mined
+ *   { status: "unknown" }                 — RPC has never seen this hash
+ *
+ * Callers should only treat "confirmed" as a valid on-chain anchor.
+ */
+export async function waitForClientTx(
+  txHash: string,
+  opts: { timeoutMs?: number; confirmations?: number } = {},
+): Promise<
+  | { status: "confirmed"; blockNumber: string }
+  | { status: "reverted"; blockNumber: string }
+  | { status: "pending" }
+  | { status: "unknown" }
+> {
+  if (!provider) throw new Error("Blockchain not initialized");
+  const { timeoutMs = 60_000, confirmations = 1 } = opts;
+
+  const tx = await provider.getTransaction(txHash);
+  if (!tx) return { status: "unknown" };
+
+  // Already mined — fetch receipt directly.
+  if (tx.blockNumber) {
+    const receipt = await provider.getTransactionReceipt(txHash);
+    if (!receipt) return { status: "pending" };
+    return {
+      status: receipt.status === 1 ? "confirmed" : "reverted",
+      blockNumber: String(receipt.blockNumber),
+    };
+  }
+
+  // Still pending — wait up to timeoutMs for confirmation.
+  try {
+    const receipt = await provider.waitForTransaction(
+      txHash,
+      confirmations,
+      timeoutMs,
+    );
+    if (!receipt) return { status: "pending" };
+    return {
+      status: receipt.status === 1 ? "confirmed" : "reverted",
+      blockNumber: String(receipt.blockNumber),
+    };
+  } catch {
+    // ethers throws on timeout — surface as pending so caller can retry later.
+    return { status: "pending" };
+  }
+}
+
 async function sendAnchor(data: string): Promise<OnChainResult> {
   if (!wallet || !provider) throw new Error("Blockchain not initialized");
   const tx = await wallet.sendTransaction({

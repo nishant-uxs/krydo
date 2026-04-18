@@ -33,7 +33,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { FileCheck, Shield, Ban, Send, Loader2, Inbox, CheckCircle2, XCircle, Clock, MessageSquare, Plus, Trash2 } from "lucide-react";
+import { FileCheck, Shield, Ban, Send, Loader2, Inbox, CheckCircle2, XCircle, Clock, MessageSquare, Plus, Trash2, Link2 } from "lucide-react";
 import { claimTypes, claimTypeLabels, type ClaimType } from "@shared/schema";
 import type { Credential, CredentialRequest } from "@shared/schema";
 import { shortenAddress } from "@/lib/wallet";
@@ -150,6 +150,7 @@ export default function IssueCredentialPage() {
 
       let onChainTxHash: string | undefined;
       let blockNumber: number | undefined;
+      let confirmWarning: string | undefined;
       try {
         setMutationStep("Waiting for MetaMask approval...");
         const txResult = await issueCredentialViaMetaMask(
@@ -160,11 +161,6 @@ export default function IssueCredentialPage() {
         );
         onChainTxHash = txResult.txHash;
         blockNumber = txResult.blockNumber;
-
-        setMutationStep("Recording on-chain tx...");
-        await apiRequest("PATCH", `/api/credentials/${credential.id}/tx`, {
-          txHash: onChainTxHash,
-        }).catch(() => {});
       } catch (err: any) {
         if (err.code === 4001 || err.code === "ACTION_REJECTED") {
           return { ...credential, txHash: credential.txHash, blockNumber: credential.blockNumber, rejected: true };
@@ -172,7 +168,33 @@ export default function IssueCredentialPage() {
         throw err;
       }
 
-      return { ...credential, txHash: onChainTxHash || credential.txHash, blockNumber: blockNumber || credential.blockNumber };
+      // Hand the hash to the server so it can verify the receipt against
+      // Sepolia and persist the real block number. Previously we swallowed
+      // errors here with `.catch(() => {})`, which meant a dropped /
+      // wrong-chain / reverted tx would leave the UI permanently stuck on
+      // the server's random placeholder hash. We now surface server-side
+      // failures as a *warning* (the credential itself is already saved +
+      // MetaMask already confirmed locally) and the user can hit the
+      // Re-anchor button on the Issued tab to retry.
+      setMutationStep("Confirming on Sepolia...");
+      try {
+        const patchRes = await apiRequest(
+          "PATCH",
+          `/api/credentials/${credential.id}/tx`,
+          { txHash: onChainTxHash },
+        );
+        const patched = await patchRes.json().catch(() => ({} as any));
+        if (patched.blockNumber) blockNumber = Number(patched.blockNumber);
+      } catch (err: any) {
+        confirmWarning = err.message ?? "Server could not confirm the tx — use Re-anchor to retry.";
+      }
+
+      return {
+        ...credential,
+        txHash: onChainTxHash || credential.txHash,
+        blockNumber: blockNumber || credential.blockNumber,
+        confirmWarning,
+      };
     },
     onSuccess: (data: any) => {
       setMutationStep("");
@@ -183,6 +205,13 @@ export default function IssueCredentialPage() {
       if (data.rejected) {
         toast({ title: "On-chain signing rejected", description: "Credential saved but not recorded on-chain.", variant: "destructive" });
         return;
+      }
+      if (data.confirmWarning) {
+        toast({
+          title: "Credential issued — confirmation pending",
+          description: "MetaMask confirmed the tx, but the server could not verify it yet. Use Re-anchor on the Issued tab if this persists.",
+          variant: "destructive",
+        });
       }
       setLastTx({
         txHash: data.txHash,
@@ -195,6 +224,43 @@ export default function IssueCredentialPage() {
     onError: (error: Error) => {
       setMutationStep("");
       toast({ title: "Failed to issue credential", description: error.message, variant: "destructive" });
+    },
+  });
+
+  // Re-anchor a credential whose Firestore row exists but whose on-chain tx
+  // was never confirmed (legacy records from before the PATCH endpoint
+  // started verifying receipts, or records where the user's wallet dropped
+  // the tx). The server signs + submits from its root wallet so the user
+  // doesn't need to open MetaMask; endpoint is idempotent.
+  const reanchorMutation = useMutation({
+    mutationFn: async (credId: string) => {
+      setMutationStep("Re-anchoring on Sepolia...");
+      const res = await apiRequest("POST", `/api/credentials/${credId}/anchor`, {});
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      setMutationStep("");
+      queryClient.invalidateQueries({ queryKey: ["/api/credentials"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/credentials/issued"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/transactions"] });
+      if (data.alreadyOnChain) {
+        toast({
+          title: "Already on-chain",
+          description: "This credential is already verified on Sepolia.",
+        });
+        return;
+      }
+      setLastTx({
+        txHash: data.txHash,
+        blockNumber: String(data.blockNumber),
+        title: "Credential Re-anchored",
+        description: "The credential is now verified on the Sepolia blockchain.",
+      });
+      setTxDialogOpen(true);
+    },
+    onError: (error: Error) => {
+      setMutationStep("");
+      toast({ title: "Re-anchor failed", description: error.message, variant: "destructive" });
     },
   });
 
@@ -612,37 +678,54 @@ export default function IssueCredentialPage() {
                         </p>
                       </div>
                       {cred.status === "active" && (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => {
-                            setConfirmInfo({
-                              action: "revoke_credential",
-                              title: "Revoke Credential",
-                              description: "This will permanently revoke this credential on the Sepolia blockchain.",
-                              details: [
-                                { label: "Action", value: "Revoke Credential On-Chain" },
-                                { label: "Type", value: claimTypeLabels[cred.claimType as keyof typeof claimTypeLabels] || cred.claimType },
-                                { label: "Holder", value: cred.holderAddress, mono: true },
-                                { label: "Hash", value: cred.credentialHash.slice(0, 20) + "...", mono: true },
-                                { label: "Contract", value: "KrydoCredentials", mono: true },
-                                { label: "Network", value: "Sepolia Testnet" },
-                              ],
-                              warning: "This action is irreversible. The credential will be marked as revoked on-chain.",
-                            });
-                            setPendingAction(() => () => revokeMutation.mutate(cred.id));
-                            setConfirmOpen(true);
-                          }}
-                          disabled={revokeMutation.isPending}
-                          data-testid={`button-revoke-cred-${cred.id}`}
-                        >
-                          {revokeMutation.isPending ? (
-                            <Loader2 className="w-3 h-3 mr-1 animate-spin" />
-                          ) : (
-                            <Ban className="w-3 h-3 mr-1" />
-                          )}
-                          {revokeMutation.isPending ? "Revoking..." : "Revoke"}
-                        </Button>
+                        <div className="flex gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => reanchorMutation.mutate(cred.id)}
+                            disabled={reanchorMutation.isPending}
+                            data-testid={`button-reanchor-cred-${cred.id}`}
+                            title="Verify / re-submit the on-chain anchor transaction"
+                          >
+                            {reanchorMutation.isPending ? (
+                              <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                            ) : (
+                              <Link2 className="w-3 h-3 mr-1" />
+                            )}
+                            {reanchorMutation.isPending ? "Anchoring..." : "Re-anchor"}
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                              setConfirmInfo({
+                                action: "revoke_credential",
+                                title: "Revoke Credential",
+                                description: "This will permanently revoke this credential on the Sepolia blockchain.",
+                                details: [
+                                  { label: "Action", value: "Revoke Credential On-Chain" },
+                                  { label: "Type", value: claimTypeLabels[cred.claimType as keyof typeof claimTypeLabels] || cred.claimType },
+                                  { label: "Holder", value: cred.holderAddress, mono: true },
+                                  { label: "Hash", value: cred.credentialHash.slice(0, 20) + "...", mono: true },
+                                  { label: "Contract", value: "KrydoCredentials", mono: true },
+                                  { label: "Network", value: "Sepolia Testnet" },
+                                ],
+                                warning: "This action is irreversible. The credential will be marked as revoked on-chain.",
+                              });
+                              setPendingAction(() => () => revokeMutation.mutate(cred.id));
+                              setConfirmOpen(true);
+                            }}
+                            disabled={revokeMutation.isPending}
+                            data-testid={`button-revoke-cred-${cred.id}`}
+                          >
+                            {revokeMutation.isPending ? (
+                              <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                            ) : (
+                              <Ban className="w-3 h-3 mr-1" />
+                            )}
+                            {revokeMutation.isPending ? "Revoking..." : "Revoke"}
+                          </Button>
+                        </div>
                       )}
                     </div>
                   </CardContent>

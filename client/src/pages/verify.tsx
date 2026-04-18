@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useMutation } from "@tanstack/react-query";
+import { useParams } from "wouter";
 import { apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -342,6 +343,13 @@ function ZkProofResult({ zkResult }: { zkResult: ZkVerificationResult }) {
 }
 
 export default function VerifyPage() {
+  // When the URL is /verify/:proofId (the form QR codes encode) we switch the
+  // page into a "landing" mode: the ZK-Proof tab is pre-selected, the proofId
+  // is pre-filled, and verification auto-runs so the scanner sees the result
+  // immediately without having to tap anything.
+  const params = useParams<{ proofId?: string }>();
+  const autoProofId = params?.proofId;
+
   const [result, setResult] = useState<VerificationResult | null>(null);
   const [zkResult, setZkResult] = useState<ZkVerificationResult | null>(null);
 
@@ -352,7 +360,7 @@ export default function VerifyPage() {
 
   const zkForm = useForm<z.infer<typeof zkVerifySchema>>({
     resolver: zodResolver(zkVerifySchema),
-    defaultValues: { proofId: "" },
+    defaultValues: { proofId: autoProofId ?? "" },
   });
 
   const verifyMutation = useMutation({
@@ -384,18 +392,30 @@ export default function VerifyPage() {
     },
   });
 
+  // Kick off a single verification whenever the URL param lands. We deliberately
+  // only run this once per proofId so the user can still edit the form and
+  // re-submit without the effect fighting them.
+  useEffect(() => {
+    if (!autoProofId) return;
+    zkForm.setValue("proofId", autoProofId);
+    zkVerifyMutation.mutate({ proofId: autoProofId });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoProofId]);
+
   return (
     <div className="p-6 max-w-2xl mx-auto space-y-6">
       <div>
         <h1 className="font-serif text-2xl font-bold" data-testid="text-verify-title">
-          Verify
+          {autoProofId ? "Proof Verification" : "Verify"}
         </h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Verify credentials and zero-knowledge proofs without special permissions
+          {autoProofId
+            ? "Live cryptographic + on-chain verification of the proof encoded in the QR code you scanned."
+            : "Verify credentials and zero-knowledge proofs without special permissions"}
         </p>
       </div>
 
-      <Tabs defaultValue="credential">
+      <Tabs defaultValue={autoProofId ? "zk-proof" : "credential"}>
         <TabsList className="w-full">
           <TabsTrigger value="credential" className="flex-1" data-testid="tab-verify-credential">
             <Eye className="w-4 h-4 mr-2" />

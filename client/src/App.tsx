@@ -63,6 +63,7 @@ function AuthenticatedLayout() {
               <Route path="/issue" component={IssueCredentialPage} />
               <Route path="/request" component={RequestCredentialPage} />
               <Route path="/credentials" component={CredentialsPage} />
+              <Route path="/verify/:proofId" component={VerifyPage} />
               <Route path="/verify" component={VerifyPage} />
               <Route path="/zk-proofs" component={ZkProofsPage} />
               <Route path="/transactions" component={TransactionsPage} />
@@ -81,11 +82,15 @@ function Router() {
   const { isConnected } = useWallet();
   const [location] = useLocation();
 
-  if (!isConnected && location !== "/verify") {
+  // `/verify` and `/verify/:id` are the only public routes — QR-scanners /
+  // external verifiers must be able to land here without a wallet.
+  const isPublicVerifyRoute = location === "/verify" || location.startsWith("/verify/");
+
+  if (!isConnected && !isPublicVerifyRoute) {
     return <Landing />;
   }
 
-  if (location === "/verify" && !isConnected) {
+  if (isPublicVerifyRoute && !isConnected) {
     return (
       <div className="min-h-screen bg-background">
         <header className="border-b bg-background/80 backdrop-blur-sm sticky top-0 z-40">
@@ -99,7 +104,10 @@ function Router() {
             </div>
           </div>
         </header>
-        <VerifyPage />
+        <Switch>
+          <Route path="/verify/:proofId" component={VerifyPage} />
+          <Route path="/verify" component={VerifyPage} />
+        </Switch>
       </div>
     );
   }

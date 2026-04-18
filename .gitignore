@@ -16,3 +16,6 @@ coverage
 # Firebase service-account credentials
 krydo-*firebase-adminsdk*.json
 *-firebase-adminsdk-*.json
+
+# Internal / working-doc only, never ship to GitHub
+ROADMAP.md

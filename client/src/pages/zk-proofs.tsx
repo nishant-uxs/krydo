@@ -35,10 +35,12 @@ import {
   EyeOff,
   Link2,
   ExternalLink,
+  QrCode,
 } from "lucide-react";
 import type { Credential, ZkProof } from "@shared/schema";
 import { proofTypeLabels, claimTypeLabels, type ProofType, type ClaimType } from "@shared/schema";
 import { motion } from "framer-motion";
+import { QrCodeCanvas } from "@/components/qr-code-canvas";
 
 export default function ZkProofsPage() {
   const { address } = useWallet();
@@ -51,6 +53,7 @@ export default function ZkProofsPage() {
   const [proofDialogOpen, setProofDialogOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [selectedFields, setSelectedFields] = useState<string[]>([]);
+  const [qrProofId, setQrProofId] = useState<string | null>(null);
 
   const credentialFields = useMemo(() => {
     if (!selectedCredential) return {};
@@ -362,14 +365,25 @@ export default function ZkProofsPage() {
                           {new Date(proof.createdAt).toLocaleString()}
                         </p>
                       </div>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => copyProofId(proof.id)}
-                        data-testid={`button-copy-proof-${proof.id}`}
-                      >
-                        {copied ? <CheckCircle2 className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-                      </Button>
+                      <div className="flex flex-col gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setQrProofId(proof.id)}
+                          data-testid={`button-qr-proof-${proof.id}`}
+                        >
+                          <QrCode className="w-3 h-3 mr-1" />
+                          QR
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => copyProofId(proof.id)}
+                          data-testid={`button-copy-proof-${proof.id}`}
+                        >
+                          {copied ? <CheckCircle2 className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                        </Button>
+                      </div>
                     </div>
                   </CardContent>
                 </Card>
@@ -455,9 +469,69 @@ export default function ZkProofsPage() {
                 )}
               </div>
 
+              <div className="pt-2 border-t">
+                <p className="text-xs text-muted-foreground mb-2">
+                  Scan this QR to verify the proof on any device
+                </p>
+                <div className="flex flex-col items-center gap-2">
+                  <div className="bg-white p-2 rounded-lg">
+                    <QrCodeCanvas
+                      value={`${window.location.origin}/verify/${generatedProof.id}`}
+                      size={180}
+                    />
+                  </div>
+                  <code className="font-mono text-[10px] text-muted-foreground break-all text-center px-2">
+                    {`${window.location.origin}/verify/${generatedProof.id}`}
+                  </code>
+                </div>
+              </div>
+
               <p className="text-xs text-muted-foreground">
-                Share the Proof ID with any verifier. They can verify your claim without seeing your actual data.
+                Share the Proof ID or QR with any verifier. They can verify your claim without seeing your actual data.
               </p>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Per-card QR share dialog. Opens when a user clicks the QR button on
+          an existing proof row — encodes the public /verify/:id URL so the
+          scanning device lands directly on a live verification view. */}
+      <Dialog open={!!qrProofId} onOpenChange={(open) => !open && setQrProofId(null)}>
+        <DialogContent className="max-w-xs">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <QrCode className="w-5 h-5 text-primary" />
+              Share ZK Proof
+            </DialogTitle>
+          </DialogHeader>
+          {qrProofId && (
+            <div className="flex flex-col items-center gap-3 py-2">
+              <div className="bg-white p-2 rounded-lg">
+                <QrCodeCanvas
+                  value={`${window.location.origin}/verify/${qrProofId}`}
+                  size={220}
+                />
+              </div>
+              <p className="text-xs text-muted-foreground text-center">
+                Anyone scanning this QR will land on a public verification page for this proof — no account required.
+              </p>
+              <code className="font-mono text-[10px] text-muted-foreground break-all text-center px-2">
+                {`${window.location.origin}/verify/${qrProofId}`}
+              </code>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  navigator.clipboard.writeText(`${window.location.origin}/verify/${qrProofId}`);
+                  toast({ title: "Link copied", description: "Verification URL copied to clipboard." });
+                }}
+                className="w-full"
+                data-testid="button-copy-qr-link"
+              >
+                <Copy className="w-3 h-3 mr-1" />
+                Copy Link
+              </Button>
             </div>
           )}
         </DialogContent>
