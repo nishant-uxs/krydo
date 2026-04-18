@@ -1,6 +1,9 @@
 import { Switch, Route, useLocation } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
+import { WagmiProvider } from "wagmi";
+import { RainbowKitProvider, lightTheme } from "@rainbow-me/rainbowkit";
+import { wagmiConfig, SUPPORTED_CHAIN } from "@/lib/wagmi";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { WalletProvider, useWallet } from "@/lib/wallet";
@@ -107,12 +110,24 @@ function Router() {
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <WalletProvider>
-          <Toaster />
-          <Router />
-        </WalletProvider>
-      </TooltipProvider>
+      <WagmiProvider config={wagmiConfig}>
+        <RainbowKitProvider
+          initialChain={SUPPORTED_CHAIN}
+          modalSize="compact"
+          theme={lightTheme({
+            accentColor: "hsl(230 80% 55%)",
+            borderRadius: "medium",
+            fontStack: "system",
+          })}
+        >
+          <TooltipProvider>
+            <WalletProvider>
+              <Toaster />
+              <Router />
+            </WalletProvider>
+          </TooltipProvider>
+        </RainbowKitProvider>
+      </WagmiProvider>
     </QueryClientProvider>
   );
 }

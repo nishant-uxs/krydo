@@ -7,7 +7,7 @@
 **Prove you qualify — without revealing what you have.**
 
 [![CI](https://github.com/nishant-uxs/krydo/actions/workflows/ci.yml/badge.svg)](https://github.com/nishant-uxs/krydo/actions/workflows/ci.yml)
-[![tests](https://img.shields.io/badge/tests-132%20passing-brightgreen)](./server/crypto/sigma.test.ts)
+[![tests](https://img.shields.io/badge/tests-154%20passing-brightgreen)](./server/crypto/sigma.test.ts)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![Network: Sepolia](https://img.shields.io/badge/network-Sepolia-627EEA?logo=ethereum&logoColor=white)](https://sepolia.etherscan.io/address/0x0BE4fE934Ff4e9B24186C1cdd0cdFe0594209821)
 [![Made with TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
@@ -213,7 +213,7 @@ For Krydo's current off-chain-verifier model, sigma wins on DX, shipping speed, 
 - A Firebase project with Firestore enabled + an Admin SDK service-account JSON
 - An Alchemy API key for **Sepolia**
 - A Sepolia wallet funded with test ETH (for issuer / credential operations)
-- MetaMask installed in the browser you'll use
+- Any EIP-1193 wallet — MetaMask, Coinbase Wallet, Rainbow, Rabby, Brave, Frame, or a mobile wallet via WalletConnect QR
 
 ### 1. Install
 
@@ -237,7 +237,7 @@ cp .env.example .env
 
 ```bash
 npm run dev        # dev server with HMR at http://localhost:5000
-npm test           # 105 unit tests (~15s)
+npm test           # 154 unit tests (~16s)
 npm run check      # strict typecheck
 npm run build      # production build
 npm start          # run built server
@@ -252,6 +252,33 @@ npm run compile:contracts    # solc → contracts/artifacts/
 npm run deploy:contracts     # writes contracts/deployment.json
 ```
 
+### 5. Deploy to Render (one-click Blueprint)
+
+The repo ships with a [`render.yaml`](./render.yaml) Blueprint.
+
+1. Push this repo to your GitHub.
+2. In the Render dashboard: **New +** → **Blueprint** → pick this repo.
+3. Fill in the secrets Render prompts for (marked `sync: false` in the blueprint):
+   - `FIREBASE_SERVICE_ACCOUNT` — paste the *entire* service-account JSON as a single string (Render doesn't mount files).
+   - `FIREBASE_PROJECT_ID`
+   - `ALCHEMY_API_KEY`
+   - `DEPLOYER_PRIVATE_KEY`
+   - `CORS_ORIGINS` — your Render URL (e.g. `https://krydo.onrender.com`).
+   - `VITE_WALLETCONNECT_PROJECT_ID` *(optional)* — enables WalletConnect v2 mobile signing.
+4. Hit **Apply**. Render runs `npm ci && npm run build`, starts with `npm start`, and uses `/healthz` as the liveness probe.
+
+Cold start on the free plan is ~30s. Bump the plan to `starter` for an always-warm instance.
+
+### 6. Export credentials in W3C VC format
+
+Once a credential is issued, any verifier can pull its W3C v2 representation:
+
+```bash
+curl https://krydo.onrender.com/api/credentials/<uuid>/vc
+```
+
+Returns `application/vc+ld+json` with a `did:ethr:sepolia` subject + a Krydo on-chain anchor proof — consumable by Veramo, Ceramic, Walt.id, Microsoft Entra, or any tool that speaks the spec.
+
 ---
 
 ## Project layout
@@ -260,23 +287,29 @@ npm run deploy:contracts     # writes contracts/deployment.json
 krydo/
 ├── client/                    # React app (Vite)
 │   └── src/
-│       ├── lib/contracts.ts   # MetaMask-side contract interactions
+│       ├── lib/wagmi.ts       # wagmi v2 config (MetaMask, WalletConnect, Coinbase, injected)
+│       ├── lib/wallet.tsx     # Krydo WalletProvider + SIWE flow on top of wagmi
+│       ├── lib/eip1193-bridge.ts  # pluggable provider shim for contract helpers
+│       ├── lib/contracts.ts   # client-side contract interactions (wallet-agnostic)
 │       ├── pages/             # /dashboard /issuers /credentials /zk-proofs ...
 │       └── components/
 ├── server/                    # Express API
 │   ├── auth/                  # SIWE + JWT
 │   ├── crypto/                # EC math, Pedersen, sigma protocols
 │   ├── middleware/            # security, pagination, logging
-│   ├── routes/                # issuers, credentials, zk, stats, network
+│   ├── routes/                # issuers, credentials, zk, stats, health, network
 │   ├── validation/            # Zod schemas
 │   ├── blockchain.ts          # ethers + contract wrappers
 │   ├── storage.ts             # Firestore abstraction
 │   └── zk-engine.ts           # high-level proof types
 ├── shared/
 │   ├── contracts.ts           # single source of truth for addresses + ABIs
-│   └── schema.ts              # shared TS types for API
+│   ├── schema.ts              # shared TS types for API
+│   ├── claim-schemas.ts       # per-claim-type Zod validators
+│   └── vc.ts                  # W3C Verifiable Credentials Data Model v2 mapper
 ├── contracts/                 # .sol sources + deployment.json
 ├── script/                    # deploy + build scripts
+├── render.yaml                # Render Blueprint (one-click deploy)
 ├── .github/workflows/ci.yml   # GitHub Actions pipeline
 └── vitest.config.ts
 ```
@@ -299,13 +332,14 @@ krydo/
 - [x] **Health + readiness probes** — `/healthz` + `/readyz`
 - [x] **Issuer analytics** — `/api/stats/issuer/:address`
 - [x] **Search + filter** on credential and issuer lists (`?search=`, `?claimType=`, `?category=`)
-- [x] 132 unit tests + GitHub Actions CI + coverage artifact
+- [x] **Multi-wallet** via wagmi v2 + RainbowKit v2 — MetaMask, WalletConnect v2, Coinbase Wallet, Rainbow, Rabby, Brave, Frame, any injected EIP-1193 wallet
+- [x] **W3C Verifiable Credentials Data Model v2** export at `GET /api/credentials/:id/vc` — `did:ethr:sepolia` subjects + CAIP-2 on-chain anchor proof, consumable by Veramo / Ceramic / Walt.id / Microsoft Entra
+- [x] **One-click Render deploy** via `render.yaml` Blueprint
+- [x] 154 unit tests + GitHub Actions CI + coverage artifact
 
 ### Next up
 
 - [ ] On-chain Groth16/PLONK verifier contract (O(1) proof verification)
-- [ ] WalletConnect v2 / RainbowKit (mobile + hardware wallet support)
-- [ ] W3C Verifiable Credentials Data Model v2 compliance + DID interop
 - [ ] IPFS/Arweave-backed encrypted credential store (decentralize the off-chain layer)
 - [ ] Multi-sig root authority (Safe contract)
 - [ ] On-chain revocation registry for ZK proofs

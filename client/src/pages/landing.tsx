@@ -1,17 +1,10 @@
 import { useWallet } from "@/lib/wallet";
 import { useLocation } from "wouter";
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ThemeToggle } from "@/components/theme-toggle";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-} from "@/components/ui/dialog";
-import { Shield, Lock, Eye, ArrowRight, Wallet, Layers, CheckCircle2, Network, AlertTriangle } from "lucide-react";
+import { Shield, Lock, Eye, ArrowRight, Wallet, Layers, CheckCircle2, Network } from "lucide-react";
 import { SiEthereum } from "react-icons/si";
 import { motion } from "framer-motion";
 
@@ -26,19 +19,17 @@ const stagger = {
 };
 
 export default function Landing() {
-  const { isConnected, isConnecting, hasMetaMask, connect } = useWallet();
+  const { isConnected, isConnecting, connect } = useWallet();
   const [, navigate] = useLocation();
-  const [showNoMetaMask, setShowNoMetaMask] = useState(false);
 
   useEffect(() => {
     if (isConnected) navigate("/dashboard");
   }, [isConnected, navigate]);
 
+  // RainbowKit's modal handles wallet selection (MetaMask, WalletConnect,
+  // Coinbase, Rainbow, Rabby, injected, etc.) and the "no wallet installed"
+  // case on its own — so we just delegate.
   const handleConnectClick = () => {
-    if (!hasMetaMask) {
-      setShowNoMetaMask(true);
-      return;
-    }
     connect();
   };
 
@@ -54,7 +45,7 @@ export default function Landing() {
             <ThemeToggle />
             <Button onClick={handleConnectClick} disabled={isConnecting} data-testid="button-hero-connect">
               <SiEthereum className="w-4 h-4 mr-2" />
-              {isConnecting ? "Detecting role..." : "Connect MetaMask"}
+              {isConnecting ? "Signing in..." : "Connect Wallet"}
             </Button>
           </div>
         </div>
@@ -91,7 +82,7 @@ export default function Landing() {
             <motion.div className="flex flex-wrap items-center gap-3" variants={fadeUp}>
               <Button size="lg" onClick={handleConnectClick} disabled={isConnecting} data-testid="button-cta-connect">
                 <SiEthereum className="w-4 h-4 mr-2" />
-                {isConnecting ? "Detecting role..." : "Connect MetaMask"}
+                {isConnecting ? "Signing in..." : "Connect Wallet"}
                 <ArrowRight className="w-4 h-4 ml-2" />
               </Button>
               <Button size="lg" variant="outline" onClick={() => navigate("/verify")} data-testid="button-cta-verify">
@@ -182,36 +173,6 @@ export default function Landing() {
             </motion.div>
           </div>
         </section>
-
-        <Dialog open={showNoMetaMask} onOpenChange={setShowNoMetaMask}>
-          <DialogContent className="sm:max-w-md">
-            <DialogHeader>
-              <DialogTitle className="font-serif flex items-center gap-2">
-                <AlertTriangle className="w-5 h-5 text-chart-4" />
-                MetaMask Required
-              </DialogTitle>
-              <DialogDescription>
-                MetaMask browser extension is required to connect your wallet.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="space-y-3">
-              <a
-                href="https://metamask.io/download/"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="block"
-              >
-                <Button className="w-full" data-testid="button-install-metamask">
-                  <SiEthereum className="w-4 h-4 mr-2" />
-                  Install MetaMask
-                </Button>
-              </a>
-              <p className="text-xs text-center text-muted-foreground">
-                After installing, refresh this page and try connecting again.
-              </p>
-            </div>
-          </DialogContent>
-        </Dialog>
 
         <footer className="border-t">
           <div className="max-w-6xl mx-auto px-6 py-8 flex flex-wrap items-center justify-between gap-4">

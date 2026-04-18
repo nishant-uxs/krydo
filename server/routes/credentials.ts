@@ -4,6 +4,7 @@ import { z } from "zod";
 import { storage } from "../storage";
 import { insertCredentialSchema } from "@shared/schema";
 import { validateClaimData } from "@shared/claim-schemas";
+import { credentialToVC } from "@shared/vc";
 import {
   issueCredentialOnChain,
   revokeCredentialOnChain,
@@ -59,6 +60,40 @@ export function registerCredentialRoutes(app: Express) {
       const page = await storage.listCredentialsByIssuerPaged(address, readPageOpts(req));
       sendPage(res, page);
     } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // --- W3C Verifiable Credentials Data Model v2 export -----------------
+  // Renders an internal Krydo credential in the standard W3C VC v2 shape
+  // so external verifiers / DID tooling (Veramo, Ceramic, Walt.id, Trinsic,
+  // Microsoft Entra, etc.) can consume it unmodified. Pure view layer —
+  // internal storage is unchanged.
+  //
+  // Public by design: VCs are portable, shareable documents. The sensitive
+  // path is *issuing* (which stays gated behind requireAuth + requireRole).
+  app.get("/api/credentials/:id/vc", async (req, res) => {
+    try {
+      const id = req.params.id as string;
+      // Basic shape check so we don't collide with the /:address route
+      // (ETH addresses never contain dashes, UUIDs always do).
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+        return res.status(400).json({ message: "Invalid credential id" });
+      }
+      const cred = await storage.getCredentialById(id);
+      if (!cred) return res.status(404).json({ message: "Credential not found" });
+
+      const issuer = await storage.getIssuerByAddress(cred.issuerAddress);
+      const baseUrl = `${req.protocol}://${req.get("host")}/api/credentials`;
+      const vc = credentialToVC(cred, {
+        issuerName: issuer?.name,
+        statusBaseUrl: baseUrl,
+      });
+
+      res.setHeader("Content-Type", "application/vc+ld+json; charset=utf-8");
+      res.json(vc);
+    } catch (error: any) {
+      log.error({ err: error }, "failed to render VC");
       res.status(500).json({ message: error.message });
     }
   });

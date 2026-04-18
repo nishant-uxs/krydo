@@ -7,21 +7,24 @@ import {
   SEPOLIA_CHAIN_ID_HEX,
   SEPOLIA_NETWORK_CONFIG,
 } from "@shared/contracts";
+import { getActiveProvider } from "./eip1193-bridge";
 
 async function ensureSepoliaNetwork(): Promise<void> {
-  if (!window.ethereum) throw new Error("MetaMask not found");
-
-  const currentChainId = await window.ethereum.request({ method: "eth_chainId" });
+  const eip = getActiveProvider();
+  const currentChainId = await eip.request({ method: "eth_chainId" });
   if (currentChainId === SEPOLIA_CHAIN_ID_HEX) return;
 
   try {
-    await window.ethereum.request({
+    await eip.request({
       method: "wallet_switchEthereumChain",
       params: [{ chainId: SEPOLIA_CHAIN_ID_HEX }],
     });
   } catch (switchError: any) {
+    // 4902 = chain not added yet. Only applies to wallets that keep a local
+    // chain list (MetaMask, Rabby, Brave). For WalletConnect/Coinbase the
+    // chain comes in via dApp metadata and this branch is never hit.
     if (switchError.code === 4902) {
-      await window.ethereum.request({
+      await eip.request({
         method: "wallet_addEthereumChain",
         params: [SEPOLIA_NETWORK_CONFIG],
       });
@@ -32,8 +35,10 @@ async function ensureSepoliaNetwork(): Promise<void> {
 }
 
 function getProvider(): ethers.BrowserProvider {
-  if (!window.ethereum) throw new Error("MetaMask not found");
-  return new ethers.BrowserProvider(window.ethereum);
+  // `any` is unavoidable: ethers wants BrowserProvider constructor args that
+  // are wider than our EIP-1193 shape. At runtime every wagmi connector's
+  // provider satisfies it.
+  return new ethers.BrowserProvider(getActiveProvider() as any);
 }
 
 async function getSigner(): Promise<ethers.JsonRpcSigner> {

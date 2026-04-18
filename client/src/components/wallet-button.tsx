@@ -32,7 +32,7 @@ export function WalletButton() {
         data-testid="button-connect-wallet"
       >
         <SiEthereum className="w-4 h-4 mr-2" />
-        {isConnecting ? "Detecting..." : "Connect MetaMask"}
+        {isConnecting ? "Signing in..." : "Connect Wallet"}
       </Button>
     );
   }
@@ -60,7 +60,7 @@ export function WalletButton() {
         <div className="px-3 py-2">
           <div className="flex items-center gap-1.5 mb-1">
             <SiEthereum className="w-3 h-3 text-muted-foreground" />
-            <p className="text-xs text-muted-foreground">MetaMask Wallet</p>
+            <p className="text-xs text-muted-foreground">Connected Wallet</p>
           </div>
           <p className="font-mono text-xs mt-1 break-all">{address}</p>
           {label && <p className="text-sm text-muted-foreground mt-1">{label}</p>}

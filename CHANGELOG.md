@@ -12,6 +12,40 @@ Nothing pending.
 
 ---
 
+## [0.4.0] — 2026-04-18
+
+Interop + UX upgrade. Three structural items that unblock production rollout.
+
+### Added — multi-wallet
+
+- **wagmi v2 + RainbowKit v2** wired into the client. Users can now connect with MetaMask, WalletConnect v2 (mobile + hardware wallets), Coinbase Wallet, Rainbow, Rabby, Brave, Frame, or any other EIP-1193-compatible wallet — not just the MetaMask browser extension.
+- `client/src/lib/wagmi.ts` — connector registry. WalletConnect is gated behind `VITE_WALLETCONNECT_PROJECT_ID` so builds without a projectId still succeed (MetaMask / Coinbase / injected still work).
+- `client/src/lib/eip1193-bridge.ts` — pluggable provider shim so `lib/contracts.ts` can keep its ethers-based function signatures unchanged. The active wagmi connector's provider is pushed in whenever it changes.
+- `client/src/lib/wallet.tsx` — rewrote the `WalletProvider` internals on top of `useAccount`, `useSignMessage`, `useDisconnect`, and RainbowKit's `useConnectModal`. Public `useWallet()` API (address / role / connect / disconnect) is unchanged so no pages had to be rewritten.
+- Removed the old "MetaMask Required" dialog from `client/src/pages/landing.tsx` — RainbowKit's modal covers the "no wallet installed" case (offers the WalletConnect QR fallback).
+- Auto-triggers SIWE sign-in when wagmi reports a new connected address. On wallet-level disconnect, invalidates the Krydo JWT too.
+
+### Added — W3C Verifiable Credentials Data Model v2
+
+- `shared/vc.ts` — pure view-layer mapper that renders an internal Krydo `Credential` as a W3C VC v2 JSON-LD document. Maps `issuerAddress` → `issuer.id` as `did:ethr:sepolia:0x...`, `holderAddress` → `credentialSubject.id`, `claimType` → PascalCased type tag + nested subject key, `credentialHash` → a `KrydoOnChainAnchor2025` proof with CAIP-2 chain ID (`eip155:11155111`). Handles `validFrom` / `validUntil`, and computes a live `credentialStatus.status` of `active | revoked | expired | suspended` using the now-aware predicate.
+- `GET /api/credentials/:id/vc` — public endpoint that returns the VC representation with `Content-Type: application/vc+ld+json`. Enables interop with Veramo, Ceramic, Walt.id, Microsoft Entra, Trinsic — anything that speaks W3C VC. Issuance paths stay gated behind `requireAuth + requireRole`; this is a read-only export.
+- 22 Vitest cases in `shared/vc.test.ts` covering context ordering, type naming, DID derivation (lowercase), subject nesting, validFrom/validUntil, status resolution (active / revoked / expired / suspended), proof anchor shape, issuer name optionality, ISO-string date coercion, and JSON serializability.
+- Zero storage-shape changes. Internal `Credential` schema and Firestore layout are identical.
+
+### Added — Render one-click deploy
+
+- `render.yaml` Blueprint: single `web` service that runs `npm ci && npm run build` / `npm start`, with `/healthz` as the liveness probe and `sync: false` markers on every secret so nothing is ever committed to git. Auto-generates `SESSION_SECRET` and `JWT_SECRET` on each environment.
+- `.env.example` now documents `FIREBASE_SERVICE_ACCOUNT` (inline JSON) as the cloud-friendly alternative to `GOOGLE_APPLICATION_CREDENTIALS` (file path), and the new `VITE_WALLETCONNECT_PROJECT_ID` build-time variable.
+- README gains a "Deploy to Render" section and a W3C VC export example.
+
+### Changed
+
+- Landing page + WalletButton copy: "Connect MetaMask" → "Connect Wallet". Same button, more honest label.
+- Project layout tree in README updated to call out `lib/wagmi.ts`, `lib/eip1193-bridge.ts`, `shared/vc.ts`, and `render.yaml`.
+- Tests bumped from 132 to **154** (+22 VC mapper cases).
+
+---
+
 ## [0.3.0] — 2026-04-18
 
 Feature wave. Semantic upgrades to make the proof/credential system behave like a real product, plus the operational endpoints needed to deploy and observe it.
