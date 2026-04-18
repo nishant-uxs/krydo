@@ -22,13 +22,17 @@ services:
     plan: free # bump to `starter` or higher for real traffic + no cold starts
     region: oregon # or `frankfurt` / `singapore` — pick closest to users
     branch: main
-    # Use `npm install` instead of `npm ci` to work around the long-standing
-    # npm bug where platform-specific `optionalDependencies` of packages like
-    # rollup (@rollup/rollup-linux-x64-gnu) are omitted when the lockfile was
-    # generated on a different OS (Windows/macOS dev -> Linux deploy).
-    # See: https://github.com/npm/cli/issues/4828
-    # If we ever move to a fully-Linux CI pipeline we can switch back to `npm ci`.
-    buildCommand: npm install --include=optional && npm run build
+    # Build workaround for npm/cli#4828.
+    #   - Our lockfile is generated on Windows, which locks the Windows-only
+    #     rollup binary (@rollup/rollup-win32-x64-msvc).
+    #   - On Render (Linux), `npm ci` / `npm install` honour the lockfile
+    #     literally, so the Linux binary (@rollup/rollup-linux-x64-gnu)
+    #     is never fetched -> vite build explodes.
+    #   - Deleting package-lock.json first forces npm to re-resolve the
+    #     platform-correct optional dependencies from scratch.
+    # If we ever move CI lockfile generation into a Linux container we can
+    # drop this prefix and go back to plain `npm ci`.
+    buildCommand: rm -f package-lock.json && npm install --include=optional && npm run build
     startCommand: npm start
     healthCheckPath: /healthz
     autoDeploy: true

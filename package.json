@@ -116,6 +116,9 @@
     "vitest": "^4.1.4"
   },
   "optionalDependencies": {
-    "bufferutil": "^4.0.8"
+    "bufferutil": "^4.0.8",
+    "@rollup/rollup-linux-x64-gnu": "^4.53.5",
+    "@rollup/rollup-darwin-arm64": "^4.53.5",
+    "@rollup/rollup-darwin-x64": "^4.53.5"
   }
 }
