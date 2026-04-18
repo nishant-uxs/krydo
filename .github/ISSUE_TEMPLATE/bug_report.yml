@@ -1,0 +1,83 @@
+name: Bug report
+description: Report a bug in Krydo (non-security). For security issues, see SECURITY.md.
+title: "[bug] "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report. **If this is a security vulnerability, stop and read [`SECURITY.md`](../blob/main/SECURITY.md) — do not file it here.**
+        The more detail you give, the faster it gets fixed.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Clear, concise description of the bug.
+      placeholder: "When I click 'Generate ZK Proof' with a negative claimValue, the UI shows 'undefined' instead of an error."
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+      placeholder: "Validation error: claim value must be a non-negative integer."
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Numbered list. Include URLs, payloads, and wallet addresses if relevant.
+      value: |
+        1. Connect wallet as user
+        2. Open /zk-proofs
+        3. Select credential X
+        4. Enter claimValue "-500"
+        5. Click "Generate"
+    validations:
+      required: true
+
+  - type: input
+    id: commit
+    attributes:
+      label: Commit SHA
+      description: Run `git rev-parse HEAD` in your checkout.
+      placeholder: "907e39f"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Where does the bug occur?
+      multiple: true
+      options:
+        - Server (Node / Express)
+        - Client (browser UI)
+        - Smart contracts (Sepolia)
+        - CI / build pipeline
+        - Tests
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs / error output
+      description: Redact any secrets, JWTs, or private keys before pasting.
+      render: shell
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Sanity checklist
+      options:
+        - label: I confirmed this is NOT a security vulnerability (if it is, I'm reporting via SECURITY.md instead).
+          required: true
+        - label: I searched existing issues and didn't find a duplicate.
+          required: true
+        - label: I'm running the latest `main` or I've listed the commit SHA above.
+          required: true

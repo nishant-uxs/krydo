@@ -7,9 +7,11 @@
 **Prove you qualify — without revealing what you have.**
 
 [![CI](https://github.com/nishant-uxs/krydo/actions/workflows/ci.yml/badge.svg)](https://github.com/nishant-uxs/krydo/actions/workflows/ci.yml)
+[![tests](https://img.shields.io/badge/tests-105%20passing-brightgreen)](./server/crypto/sigma.test.ts)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![Network: Sepolia](https://img.shields.io/badge/network-Sepolia-627EEA?logo=ethereum&logoColor=white)](https://sepolia.etherscan.io/address/0x0BE4fE934Ff4e9B24186C1cdd0cdFe0594209821)
 [![Made with TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![security: disclosed privately](https://img.shields.io/badge/security-disclosure%20policy-red)](./SECURITY.md)
 
 </div>
 
@@ -42,17 +44,26 @@ The cryptographic answer to this is **zero-knowledge proofs** — prove a *predi
 
 ### The four actors
 
-```
-  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐
-  │ Root Authority   │  │ Licensed Issuer  │  │       User       │  │     Verifier     │
-  │ (deploys chain,  │  │  (CIBIL, bank,   │  │  (student, loan  │  │ (lender, exch,   │
-  │  whitelists      │─►│  employer, tax   │─►│  applicant, ...) │─►│  landlord, ...)  │
-  │  issuers)        │  │  auth, ...)      │  │                  │  │                  │
-  └──────────────────┘  └──────────────────┘  └──────────────────┘  └──────────────────┘
-         │                      │                     │                     │
-         │ on-chain register    │ on-chain issue      │ off-chain prove     │ public verify
-         ▼                      ▼                     ▼                     ▼
-  KrydoAuthority.sol     KrydoCredentials.sol    zk-engine (client + server)
+```mermaid
+flowchart LR
+    RA["<b>Root Authority</b><br/>deploys contracts<br/>whitelists issuers"]
+    ISS["<b>Licensed Issuer</b><br/>CIBIL, banks, employers,<br/>tax auth, KYC providers"]
+    USR["<b>User</b><br/>students, loan applicants,<br/>crypto-natives"]
+    VER["<b>Verifier</b><br/>lenders, exchanges,<br/>landlords, DeFi protocols"]
+
+    RA -- "whitelists<br/>(on-chain)" --> ISS
+    ISS -- "issues credential<br/>(on-chain hash + off-chain data)" --> USR
+    USR -- "generates ZK proof<br/>(browser-side)" --> VER
+    VER -- "verifies against<br/>on-chain anchor" --> RA
+
+    RA -.-> KA["KrydoAuthority.sol"]
+    ISS -.-> KC["KrydoCredentials.sol"]
+    USR -.-> ZK["zk-engine<br/>(client + server)"]
+
+    classDef actor fill:#1f2937,stroke:#60a5fa,color:#f9fafb,stroke-width:2px
+    classDef contract fill:#111827,stroke:#a78bfa,color:#e9d5ff,stroke-dasharray:3 3
+    class RA,ISS,USR,VER actor
+    class KA,KC,ZK contract
 ```
 
 ### End-to-end flow (income verification example)
@@ -62,6 +73,46 @@ The cryptographic answer to this is **zero-knowledge proofs** — prove a *predi
 3. **Alice's browser** runs `proveRange(1_200_000, blinding, "range_above", threshold=1_000_000)`. Generates a Pedersen commitment `C = v·G + r·H` and a range proof that `C - 1_000_000·G` hides a non-negative value — all without ever sending `1_200_000` anywhere.
 4. **Lender** hits `POST /api/zk/verify`. Server re-runs the elliptic-curve math on the commitment + the 32-bit-decomposed range proof and responds *true* or *false*. No one, not even Krydo, sees Alice's real salary.
 5. **Audit trail:** the commitment hash is anchored on Sepolia; anyone can later verify the proof existed and was linked to a real issuer-signed credential.
+
+### The same flow as a sequence diagram
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Alice as Alice (browser)<br/>MetaMask
+    participant Server as Krydo API
+    participant Chain as Sepolia<br/>KrydoCredentials
+    participant Lender as Lender (verifier)
+
+    Note over Alice,Lender: Authentication (EIP-4361 SIWE)
+    Alice->>Server: GET /api/auth/nonce
+    Server-->>Alice: { nonce }
+    Alice->>Alice: personal_sign(SIWE message)
+    Alice->>Server: POST /api/auth/verify { message, signature }
+    Server->>Server: verify signature, issue JWT
+    Server-->>Alice: { jwt }
+
+    Note over Alice,Chain: Credential issuance (happens once, done by employer)
+    Note right of Chain: KrydoCredentials.issueCredential(...)<br/>emits CredentialIssued event
+
+    Note over Alice,Lender: Zero-knowledge proof generation
+    Alice->>Alice: v = 1_200_000, r = randomScalar()
+    Alice->>Alice: C = v·G + r·H<br/>π = proveRange(v − 1_000_000, r, "range_above")
+    Alice->>Server: POST /api/zk/generate<br/>Authorization: Bearer <jwt>
+    Server->>Server: verify on commitment<br/>+ bit-decomposition chain
+    Server->>Chain: anchor proof hash (self-tx with tag)
+    Chain-->>Server: tx receipt, blockNumber
+    Server-->>Alice: { proofId, commitment, txHash }
+
+    Note over Alice,Lender: Verification (public, no auth required)
+    Alice->>Lender: share proofId + commitment
+    Lender->>Server: POST /api/zk/verify { proofId }
+    Server->>Server: re-run EC math (sigma verify)
+    Server->>Chain: lookup anchor tx to confirm provenance
+    Server-->>Lender: { valid: true, reason: "value ≥ threshold" }
+
+    Note right of Lender: Lender now knows Alice's income ≥ ₹10L.<br/>Lender does NOT know the actual income.
+```
 
 ---
 
@@ -263,12 +314,19 @@ Krydo is an **MVP on testnet**. Before mainnet you should expect: a third-party 
 
 ## Contributing
 
+See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for the full guide (commit conventions, test bar, code style, PR checklist).
+
+Quick version:
+
 1. Fork + branch (`git checkout -b feat/your-change`)
-2. Write tests — every new route must have Zod validation + at least one Vitest spec
+2. Write tests — every new route needs Zod validation + at least one Vitest spec
 3. `npm run check && npm test` must pass
-4. Open a PR — CI will re-run the same gates
+4. Conventional Commits format (`feat(zk):`, `fix(auth):`, …)
+5. Open a PR — CI will re-run the same gates
 
 All contributions are reviewed for security first, features second.
+
+**Security disclosures:** please follow [`SECURITY.md`](./SECURITY.md) — do not open public issues for vulnerabilities.
 
 ---
 

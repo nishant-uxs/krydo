@@ -39,7 +39,7 @@ jobs:
       - name: TypeScript typecheck
         run: npm run check
 
-      - name: Run Vitest
+      - name: Run Vitest with coverage
         # Fake env vars so server/config.ts passes validation during
         # `import config` chains pulled in by a handful of tests. Real
         # secrets live in GitHub Actions Secrets for deploy jobs.
@@ -47,4 +47,14 @@ jobs:
           JWT_SECRET: ci-test-secret-that-is-at-least-32-chars-long
           SESSION_SECRET: ci-test-session-secret-at-least-32-chars-long
           NODE_ENV: test
-        run: npm test
+        run: npm run test:coverage
+
+      - name: Upload coverage artifact
+        # Coverage HTML report is attached to the run for manual inspection.
+        # Kept 30 days by default; PRs get a clickable "Artifacts" download.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
+          retention-days: 30
