@@ -27,7 +27,14 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        run: npm ci
+        # `npm ci` is deterministic but interacts badly with rollup's
+        # platform-specific optional dependencies when the lockfile was
+        # generated on a different OS (see npm/cli#4828). The lockfile
+        # committed here is generated on Windows; regenerating on the Linux
+        # runner guarantees the Linux-specific rollup binary gets resolved.
+        run: |
+          rm -f package-lock.json
+          npm install --no-audit --no-fund
 
       - name: TypeScript typecheck
         run: npm run check
