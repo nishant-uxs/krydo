@@ -1,5 +1,7 @@
 # Krydo — Privacy-Preserving Financial Trust Infrastructure
 
+![CI](https://github.com/nishant-uxs/krydo/actions/workflows/ci.yml/badge.svg)
+
 Krydo is a decentralized privacy-preserving financial trust system. Users can prove financial credibility without revealing sensitive financial data. The system uses a hierarchical trust model: **Root Authority → Issuers → Users → Verifiers**.
 
 ---

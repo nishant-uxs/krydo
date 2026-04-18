@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Prevent old in-progress runs from eating minutes when someone pushes fast.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  typecheck-and-test:
+    name: Typecheck + Vitest
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript typecheck
+        run: npm run check
+
+      - name: Run Vitest
+        # Fake env vars so server/config.ts passes validation during
+        # `import config` chains pulled in by a handful of tests. Real
+        # secrets live in GitHub Actions Secrets for deploy jobs.
+        env:
+          JWT_SECRET: ci-test-secret-that-is-at-least-32-chars-long
+          SESSION_SECRET: ci-test-session-secret-at-least-32-chars-long
+          NODE_ENV: test
+        run: npm test
