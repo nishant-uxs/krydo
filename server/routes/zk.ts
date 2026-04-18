@@ -33,6 +33,11 @@ export function registerZkRoutes(app: Express) {
         // most fintech counterparties operate on). Cap at 365 so stale
         // proofs don't linger forever.
         ttlDays: z.number().int().min(1).max(365).optional().default(30),
+        // Full-SSI flag: when true, server generates + stores the proof but
+        // skips on-chain anchoring. Client is expected to call
+        // anchorZkProofViaMetaMask with the returned commitment + credentialHash,
+        // then POST /api/zk/:id/anchor to link the tx hash.
+        clientWillAnchor: z.boolean().optional(),
       });
       // Prover is always the authenticated wallet.
       const data = { ...schema.parse(req.body), proverAddress: req.auth!.sub };
@@ -96,7 +101,10 @@ export function registerZkRoutes(app: Express) {
 
       let onChainTxHash: string | null = null;
       let onChainBlockNumber: string | null = null;
-      if (isBlockchainReady()) {
+
+      // Full-SSI: skip server-side anchoring — client will sign a self-tx
+      // via MetaMask and POST /api/zk/:id/anchor afterwards.
+      if (!data.clientWillAnchor && isBlockchainReady()) {
         try {
           const r = await anchorZkProofOnChain(
             proof.commitment,
@@ -109,7 +117,7 @@ export function registerZkRoutes(app: Express) {
           await storage.updateZkProofOnChain(stored.id, r.txHash);
           log.info(
             { txHash: r.txHash, blockNumber: r.blockNumber, proofId: stored.id },
-            "ZK proof anchored on-chain",
+            "ZK proof anchored on-chain (server)",
           );
         } catch (err: any) {
           log.error({ err: err.message, proofId: stored.id }, "ZK proof on-chain anchoring failed");
@@ -137,6 +145,8 @@ export function registerZkRoutes(app: Express) {
         verified: proof.verified,
         claimType: credential.claimType,
         claimSummary: credential.claimSummary,
+        // Echo back what client needs to sign its own anchor tx.
+        credentialHash: credential.credentialHash,
         onChainTxHash,
         txHash: tx.txHash,
       });
@@ -144,6 +154,95 @@ export function registerZkRoutes(app: Express) {
       if (error instanceof z.ZodError) {
         return res.status(400).json({ message: error.errors[0].message });
       }
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  /**
+   * Link a client-signed anchor tx to an already-generated ZK proof.
+   * Used by the Full-SSI flow: the holder's wallet signs a self-tx with
+   * encoded KRYDO_ZK_PROOF_V1 payload, then POSTs the tx hash here so the
+   * server can verify the Sepolia receipt and mark the proof as anchored.
+   *
+   * Only the prover (who created the proof) or root can call this.
+   */
+  app.post("/api/zk/:id/anchor", requireAuth, sensitiveLimiter, async (req, res) => {
+    try {
+      const id = req.params.id as string;
+      const { txHash } = req.body ?? {};
+      if (!txHash || typeof txHash !== "string") {
+        return res.status(400).json({ message: "txHash is required" });
+      }
+      if (!/^0x[0-9a-f]{64}$/i.test(txHash)) {
+        return res.status(400).json({ message: "txHash is not a valid Ethereum transaction hash" });
+      }
+
+      const proof = await storage.getZkProof(id);
+      if (!proof) return res.status(404).json({ message: "ZK proof not found" });
+
+      const caller = req.auth!.sub.toLowerCase();
+      const isProver = proof.proverAddress.toLowerCase() === caller;
+      const isRoot = req.auth!.role === "root";
+      if (!isProver && !isRoot) {
+        return res
+          .status(403)
+          .json({ message: "Only the prover can anchor this ZK proof" });
+      }
+
+      if (!isBlockchainReady()) {
+        return res
+          .status(503)
+          .json({ message: "Blockchain provider not configured on this server" });
+      }
+
+      // Verify the client-signed tx actually landed on Sepolia. We reuse
+      // the same receipt-polling helper as the credential PATCH path.
+      const { waitForClientTx } = await import("../blockchain");
+      const result = await waitForClientTx(txHash, { timeoutMs: 45_000 });
+      if (result.status === "unknown") {
+        return res.status(422).json({
+          message:
+            "Anchor tx not found on Sepolia. Please retry signing — your wallet may be on a different chain.",
+          status: result.status,
+        });
+      }
+      if (result.status === "reverted") {
+        return res.status(422).json({
+          message: "Anchor tx reverted. The proof was not anchored on-chain.",
+          status: result.status,
+          blockNumber: result.blockNumber,
+        });
+      }
+
+      await storage.updateZkProofOnChain(id, txHash);
+
+      // Link the tx audit row too (mirrors how /credentials/:id/tx does it).
+      const txs = await storage.getTransactions(proof.proverAddress);
+      const proofTx = txs.find(
+        (t) => t.data && (t.data as any).proofId === id,
+      );
+      if (proofTx) {
+        if (result.status === "confirmed") {
+          await storage.updateTransactionOnChain(proofTx.id, txHash, result.blockNumber);
+        } else {
+          await storage.updateTransactionTxHash(proofTx.id, txHash);
+        }
+      }
+
+      log.info(
+        { proofId: id, txHash, status: result.status },
+        "ZK proof anchored on-chain (MetaMask)",
+      );
+
+      res.json({
+        success: true,
+        proofId: id,
+        txHash,
+        status: result.status,
+        blockNumber: result.status === "confirmed" ? result.blockNumber : undefined,
+      });
+    } catch (error: any) {
+      log.error({ err: error.message }, "failed to anchor ZK proof");
       res.status(500).json({ message: error.message });
     }
   });

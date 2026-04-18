@@ -41,6 +41,7 @@ import type { Credential, ZkProof } from "@shared/schema";
 import { proofTypeLabels, claimTypeLabels, type ProofType, type ClaimType } from "@shared/schema";
 import { motion } from "framer-motion";
 import { QrCodeCanvas } from "@/components/qr-code-canvas";
+import { anchorZkProofViaMetaMask } from "@/lib/contracts";
 
 export default function ZkProofsPage() {
   const { address } = useWallet();
@@ -75,13 +76,20 @@ export default function ZkProofsPage() {
 
   const activeCredentials = credentials?.filter((c) => c.status === "active") || [];
 
+  // Progress indicator for the 3-step full-SSI flow: generate → sign → anchor.
+  const [genStep, setGenStep] = useState<string>("");
+
   const generateMutation = useMutation({
     mutationFn: async () => {
       if (!selectedCredential) throw new Error("Select a credential");
+      if (!address) throw new Error("Wallet not connected");
+
       const body: any = {
         credentialId: selectedCredential.id,
         proverAddress: address,
         proofType,
+        // Full-SSI: tell the server not to anchor; we'll sign from MetaMask.
+        clientWillAnchor: true,
       };
       if (proofType === "range_above" || proofType === "range_below") {
         if (!threshold) throw new Error("Threshold is required for range proofs");
@@ -95,16 +103,78 @@ export default function ZkProofsPage() {
         if (selectedFields.length === 0) throw new Error("Select at least one field to disclose");
         body.selectedFields = selectedFields;
       }
+
+      setGenStep("Generating zero-knowledge proof...");
       const res = await apiRequest("POST", "/api/zk/generate", body);
-      return res.json();
+      const proof = await res.json();
+
+      // proof.commitment is the Pedersen commitment C = vG + rH (33-byte EC point).
+      // proof.credentialHash echoed back so the holder's anchor tx binds the
+      // proof to the underlying credential.
+      if (!proof?.commitment || !proof?.credentialHash) {
+        // Server didn't return anchor inputs — fall back to non-anchored proof.
+        console.warn("Server did not return commitment/credentialHash; skipping on-chain anchor");
+        return { ...proof, anchorSkipped: true };
+      }
+
+      setGenStep("Waiting for MetaMask approval...");
+      let txResult: { txHash: string; blockNumber: number };
+      try {
+        txResult = await anchorZkProofViaMetaMask(
+          proof.commitment,
+          proof.credentialHash,
+          proofType,
+          address,
+        );
+      } catch (err: any) {
+        if (err.code === 4001 || err.code === "ACTION_REJECTED") {
+          // User bailed on the popup. Proof itself is still stored — they
+          // can share it, but it won't show as anchored until they re-sign.
+          toast({
+            title: "Anchor signing skipped",
+            description: "Proof generated but not anchored on-chain. Share/verify still works; re-anchor later if needed.",
+            variant: "destructive",
+          });
+          return { ...proof, anchorSkipped: true };
+        }
+        throw err;
+      }
+
+      setGenStep("Recording anchor on Sepolia...");
+      try {
+        const anchorRes = await apiRequest("POST", `/api/zk/${proof.id}/anchor`, {
+          txHash: txResult.txHash,
+        });
+        const anchorJson = await anchorRes.json();
+        return {
+          ...proof,
+          onChainTxHash: txResult.txHash,
+          blockNumber: anchorJson.blockNumber || txResult.blockNumber,
+        };
+      } catch (err: any) {
+        console.warn("Anchor tx hash PATCH failed:", err?.message);
+        return { ...proof, onChainTxHash: txResult.txHash };
+      }
     },
     onSuccess: (data) => {
+      setGenStep("");
       setGeneratedProof(data);
       setProofDialogOpen(true);
       queryClient.invalidateQueries({ queryKey: ["/api/zk/proofs"] });
-      toast({ title: "ZK Proof Generated", description: data.verified ? "Proof verified - claim satisfies the condition" : "Proof generated but claim does NOT satisfy the condition" });
+      queryClient.invalidateQueries({ queryKey: ["/api/transactions"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      const anchoredSuffix = data.anchorSkipped
+        ? " (not anchored on-chain)"
+        : " and anchored on Sepolia";
+      toast({
+        title: "ZK Proof Generated",
+        description: data.verified
+          ? `Proof verified${anchoredSuffix}`
+          : `Proof generated but claim does NOT satisfy the condition${anchoredSuffix}`,
+      });
     },
     onError: (error: Error) => {
+      setGenStep("");
       toast({ title: "Failed to generate proof", description: error.message, variant: "destructive" });
     },
   });
@@ -286,12 +356,12 @@ export default function ZkProofsPage() {
             {generateMutation.isPending ? (
               <>
                 <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                Generating ZK Proof...
+                {genStep || "Generating ZK Proof..."}
               </>
             ) : (
               <>
                 <Fingerprint className="w-4 h-4 mr-2" />
-                Generate Zero-Knowledge Proof
+                Generate & Sign On-Chain
               </>
             )}
           </Button>
