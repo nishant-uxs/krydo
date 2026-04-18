@@ -77,30 +77,51 @@ export function registerAuthRoutes(app: Express) {
         }
       }
 
+      // Snapshot the previous state BEFORE connectWallet mutates it so we
+      // can tell whether this is a first-time connect, a role change, or
+      // just a repeat sign-in with the same role.
+      const previous = await storage.getWallet(addr);
       const wallet = await storage.connectWallet(addr, role, label);
 
-      // Best-effort anchor of the role assignment on Sepolia.
-      if (isBlockchainReady()) {
-        try {
-          const { txHash, blockNumber } = await anchorRoleAssignmentOnChain(addr, role, label);
-          await storage.updateWalletOnChainTxHash(addr, txHash);
-          // Log a transaction row so the dashboard can show a real block number.
-          await storage.createTransaction({
-            txHash,
-            action: "role_assigned_onchain",
-            fromAddress: addr,
-            data: { role, label, onChain: true },
-            blockNumber,
-          });
-        } catch (err: any) {
-          log.error({ err: err.message, addr }, "role anchor failed");
-        }
+      // Role-assignment anchor on Sepolia: fire-and-forget.
+      //
+      // Waiting for tx.wait() on testnet blocks the sign-in response for
+      // 12–60+ seconds per login. The anchor is a provenance record, not a
+      // correctness gate — the user's SIWE signature has already been
+      // verified at this point. Let it settle in the background.
+      //
+      // Skip entirely when the wallet was previously anchored with the
+      // SAME role: repeat sign-ins don't need a fresh tx, and every tx
+      // costs real Sepolia ETH from the root wallet.
+      const roleChanged = !previous || previous.role !== role;
+      const neverAnchored = !previous || !previous.onChainTxHash;
+      const shouldAnchor = isBlockchainReady() && (roleChanged || neverAnchored);
+
+      if (shouldAnchor) {
+        void (async () => {
+          try {
+            const { txHash, blockNumber } = await anchorRoleAssignmentOnChain(
+              addr,
+              role,
+              label,
+            );
+            await storage.updateWalletOnChainTxHash(addr, txHash);
+            // Log a transaction row so the dashboard can show a real block number.
+            await storage.createTransaction({
+              txHash,
+              action: "role_assigned_onchain",
+              fromAddress: addr,
+              data: { role, label, onChain: true },
+              blockNumber,
+            });
+          } catch (err: any) {
+            log.error({ err: err.message, addr }, "role anchor failed");
+          }
+        })();
       }
 
       const token = signAuthToken({ sub: addr, role });
-      const updated = (await storage.getWallet(addr)) || wallet;
-
-      res.json({ token, wallet: updated });
+      res.json({ token, wallet });
     } catch (err: any) {
       if (err instanceof z.ZodError) {
         return res.status(400).json({ message: err.issues[0].message });
