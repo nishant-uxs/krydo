@@ -79,26 +79,105 @@ export default function IssueCredentialPage() {
 
   const respondMutation = useMutation({
     mutationFn: async (params: { id: string; status: string; responseMessage?: string; claimSummary?: string; claimValue?: string; expiresAt?: string; onChainTxHash?: string }) => {
-      const { id, ...body } = params;
-      const res = await apiRequest("POST", `/api/credential-requests/${id}/respond`, {
+      const { id, status, ...body } = params;
+
+      // --- Rejection path: single POST, no MetaMask popup needed. ---------
+      // Server still anchors the rejection on-chain via its root wallet;
+      // that's purely audit and doesn't require issuer consent.
+      if (status === "rejected") {
+        const res = await apiRequest("POST", `/api/credential-requests/${id}/respond`, {
+          ...body,
+          status,
+          respondedBy: address,
+        });
+        return res.json();
+      }
+
+      // --- Approval path: Full-SSI 3-step flow with MetaMask popup --------
+      //  1. POST /respond with prepareOnly=true → server stages credential,
+      //     returns canonical credentialHash, marks request "issuing".
+      //  2. Issuer signs issueCredential via MetaMask → real tx hash.
+      //  3a. PATCH /api/credentials/:id/tx → server verifies Sepolia receipt.
+      //  3b. POST /respond with finalize=true → server marks request "issued".
+      //
+      // If the user rejects the MetaMask popup at step 2, the staged
+      // credential + request stay in "issuing" state. They can retry later
+      // via the Re-anchor button on the Issued tab.
+      setMutationStep("Staging credential...");
+      const stageRes = await apiRequest("POST", `/api/credential-requests/${id}/respond`, {
         ...body,
+        status,
         respondedBy: address,
+        prepareOnly: true,
       });
-      return res.json();
+      const staged = await stageRes.json();
+      const credential = staged.credential;
+      if (!credential?.credentialHash) {
+        throw new Error("Server did not return a staged credential");
+      }
+
+      setMutationStep("Waiting for MetaMask approval...");
+      let txResult: { txHash: string; blockNumber: number };
+      try {
+        txResult = await issueCredentialViaMetaMask(
+          credential.credentialHash,
+          credential.holderAddress,
+          credential.claimType,
+          credential.claimSummary,
+        );
+      } catch (err: any) {
+        if (err.code === 4001 || err.code === "ACTION_REJECTED") {
+          throw new Error("Transaction rejected in MetaMask. The credential is staged but not anchored — retry from the Pending tab.");
+        }
+        throw err;
+      }
+
+      setMutationStep("Confirming on Sepolia...");
+      try {
+        await apiRequest("PATCH", `/api/credentials/${credential.id}/tx`, {
+          txHash: txResult.txHash,
+        });
+      } catch (err: any) {
+        // Receipt not confirmed yet — surface as a warning but continue
+        // finalize. The issuer can hit Re-anchor if it ultimately reverts.
+        console.warn("Credential tx PATCH failed (continuing):", err?.message);
+      }
+
+      setMutationStep("Finalizing request...");
+      const finalRes = await apiRequest("POST", `/api/credential-requests/${id}/respond`, {
+        status,
+        respondedBy: address,
+        finalize: true,
+        credentialId: credential.id,
+        onChainTxHash: txResult.txHash,
+        responseMessage: body.responseMessage,
+      });
+      const finalJson = await finalRes.json();
+      return { ...finalJson, txHash: txResult.txHash, blockNumber: txResult.blockNumber };
     },
     onSuccess: (data, variables) => {
+      setMutationStep("");
       queryClient.invalidateQueries({ queryKey: ["/api/credential-requests/issuer"] });
       queryClient.invalidateQueries({ queryKey: ["/api/credentials"] });
       queryClient.invalidateQueries({ queryKey: ["/api/credentials/issued", address] });
+      queryClient.invalidateQueries({ queryKey: ["/api/transactions"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       if (variables.status === "approved") {
         setApproveDialogOpen(false);
         setApproveRequest(null);
-        toast({ title: "Credential Issued", description: "Request approved and credential has been issued to the requester." });
+        setLastTx({
+          txHash: (data as any)?.txHash || "",
+          blockNumber: (data as any)?.blockNumber ? String((data as any).blockNumber) : undefined,
+          title: "Credential Issued",
+          description: "Request approved and credential has been signed on-chain by your wallet.",
+        });
+        setTxDialogOpen(true);
       } else {
         toast({ title: "Request Rejected" });
       }
     },
     onError: (error: Error) => {
+      setMutationStep("");
       toast({ title: "Failed", description: error.message, variant: "destructive" });
     },
   });
@@ -832,12 +911,12 @@ export default function IssueCredentialPage() {
                 {respondMutation.isPending ? (
                   <>
                     <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    Issuing Credential...
+                    {mutationStep || "Issuing Credential..."}
                   </>
                 ) : (
                   <>
                     <CheckCircle2 className="w-4 h-4 mr-2" />
-                    Approve & Issue Credential
+                    Approve & Sign On-Chain
                   </>
                 )}
               </Button>

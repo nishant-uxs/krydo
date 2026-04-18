@@ -116,6 +116,16 @@ export function registerCredentialRequestRoutes(app: Express) {
           claimData,
           expiresAt: rawExpiresAt,
           onChainTxHash,
+          // Full-SSI two-phase flags:
+          //  - prepareOnly: stage credential in Firestore + return hash,
+          //                 skip server-side on-chain signing (client will sign via MetaMask).
+          //  - finalize:    caller has already signed + confirmed on Sepolia;
+          //                 just mark request "issued" and link tx hash.
+          //  - credentialId: passed in phase-2 finalize so we know which
+          //                  previously-staged credential this maps to.
+          prepareOnly,
+          finalize,
+          credentialId: providedCredentialId,
         } = req.body;
         const respondedBy = req.auth!.sub;
 
@@ -125,8 +135,15 @@ export function registerCredentialRequestRoutes(app: Express) {
 
         const request = await storage.getCredentialRequest(id);
         if (!request) return res.status(404).json({ message: "Request not found" });
-        if (request.status !== "pending") {
-          return res.status(400).json({ message: "Request is not pending" });
+
+        // Phase-2 finalize is allowed only when the request is already
+        // "issuing" (staged by a prior prepareOnly call). All other calls
+        // require "pending".
+        const expectedStatus = finalize ? "issuing" : "pending";
+        if (request.status !== expectedStatus) {
+          return res.status(400).json({
+            message: `Request is not ${expectedStatus} (current status: ${request.status})`,
+          });
         }
 
         const issuer = await storage.getIssuerByAddress(respondedBy);
@@ -150,7 +167,19 @@ export function registerCredentialRequestRoutes(app: Express) {
 
         if (status === "rejected") {
           const updated = await storage.updateCredentialRequestStatus(id, "rejected", responseMessage);
-          if (isBlockchainReady()) {
+          // Rejection anchor: only sign server-side if client hasn't already
+          // provided a signed tx hash (Full-SSI mode sends its own tx here).
+          if (onChainTxHash) {
+            await storage.updateCredentialRequestOnChainTxHash(id, onChainTxHash);
+            await storage.createTransaction({
+              txHash: onChainTxHash,
+              action: "credential_request_rejected_onchain",
+              fromAddress: respondedBy,
+              toAddress: request.requesterAddress,
+              data: { requestId: id, claimType: request.claimType, onChain: true, clientSigned: true },
+              blockNumber: "0",
+            });
+          } else if (isBlockchainReady()) {
             try {
               const rejectRes = await anchorCredentialRequestOnChain(
                 id,
@@ -178,6 +207,47 @@ export function registerCredentialRequestRoutes(app: Express) {
           return res.json(updated);
         }
 
+        // ---- Phase-2: finalize a previously-staged credential --------------
+        if (finalize) {
+          if (!providedCredentialId) {
+            return res.status(400).json({ message: "credentialId is required to finalize" });
+          }
+          if (!onChainTxHash) {
+            return res.status(400).json({ message: "onChainTxHash is required to finalize" });
+          }
+          const credential = await storage.getCredentialById(providedCredentialId);
+          if (!credential) {
+            return res.status(404).json({ message: "Staged credential not found" });
+          }
+          // Safety: make sure this staged credential actually belongs to this
+          // request + issuer (prevents crossing wires between requests).
+          if (
+            credential.issuerAddress.toLowerCase() !== issuer.walletAddress.toLowerCase() ||
+            credential.holderAddress.toLowerCase() !== request.requesterAddress.toLowerCase()
+          ) {
+            return res.status(403).json({
+              message: "Staged credential does not match this request",
+            });
+          }
+          await storage.updateCredentialRequestOnChainTxHash(id, onChainTxHash);
+          const updated = await storage.updateCredentialRequestStatus(
+            id,
+            "issued",
+            responseMessage || "Credential issued",
+            providedCredentialId,
+          );
+          log.info(
+            { requestId: id, credentialId: providedCredentialId, txHash: onChainTxHash },
+            "request finalized (client-signed)",
+          );
+          return res.json({
+            request: updated,
+            credential,
+            txHash: onChainTxHash,
+          });
+        }
+
+        // ---- Phase-1 or legacy single-shot approval flow -------------------
         if (!claimSummary || typeof claimSummary !== "string" || claimSummary.trim().length === 0) {
           return res.status(400).json({ message: "claimSummary is required to approve and issue" });
         }
@@ -213,6 +283,23 @@ export function registerCredentialRequestRoutes(app: Express) {
           ...(expiresAtDate ? { expiresAt: expiresAtDate } : {}),
         });
 
+        // Full-SSI Phase-1: stop here. Client will sign issueCredential via
+        // MetaMask, PATCH /api/credentials/:id/tx to confirm the receipt,
+        // then POST /respond again with finalize=true to mark request issued.
+        if (prepareOnly) {
+          log.info(
+            { requestId: id, credentialId: result.credential.id },
+            "request staged for client-signed issuance",
+          );
+          return res.json({
+            request: { ...request, status: "issuing" },
+            credential: result.credential,
+            txHash: result.tx.txHash,
+            prepared: true,
+          });
+        }
+
+        // Legacy single-shot flow: server signs on behalf of issuer.
         if (onChainTxHash) {
           await storage.updateTransactionTxHash(result.tx.id, onChainTxHash);
         } else if (isBlockchainReady()) {
