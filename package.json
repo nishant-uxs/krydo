@@ -10,7 +10,9 @@
     "check": "tsc",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "deploy:contracts": "tsx script/deploy.ts",
+    "compile:contracts": "tsx script/compile.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",

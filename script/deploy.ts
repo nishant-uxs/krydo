@@ -1,3 +1,6 @@
+// Load .env first so ALCHEMY_API_KEY / DEPLOYER_PRIVATE_KEY are available when
+// read below. Side-effect import; must stay above any env-reading code.
+import "dotenv/config";
 import { ethers } from "ethers";
 import fs from "fs";
 import path from "path";

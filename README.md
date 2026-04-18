@@ -174,23 +174,13 @@ npm install
 
 ### 2. Configure `.env`
 
-```env
-# Firebase
-GOOGLE_APPLICATION_CREDENTIALS=./<your-service-account>.json
-FIREBASE_PROJECT_ID=<your-project-id>
+Copy the template and fill in your values:
 
-# Ethereum
-ALCHEMY_API_KEY=<your-alchemy-key>
-DEPLOYER_PRIVATE_KEY=<hex-without-0x-prefix>
-
-# Secrets (≥ 32 bytes each — validated at startup)
-JWT_SECRET=<random-32+-chars>
-SESSION_SECRET=<random-32+-chars>
-
-# Optional
-PORT=5000
-CORS_ORIGINS=http://localhost:5000
+```bash
+cp .env.example .env
 ```
+
+`.env.example` documents every variable (what it does, where to get it, how to generate secrets). The server validates all required vars at startup via [`server/config.ts`](./server/config.ts) — it will refuse to boot with a helpful error if anything is missing or too short.
 
 ### 3. Run
 
@@ -204,8 +194,11 @@ npm start          # run built server
 
 ### 4. (Optional) Re-deploy contracts
 
+Use this only if you want your own Sepolia deployment; by default the app talks to the already-deployed addresses listed above.
+
 ```bash
-npx tsx script/deploy.ts    # deploys to Sepolia + writes contracts/deployment.json
+npm run compile:contracts    # solc → contracts/artifacts/
+npm run deploy:contracts     # writes contracts/deployment.json
 ```
 
 ---
