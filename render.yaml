@@ -22,7 +22,13 @@ services:
     plan: free # bump to `starter` or higher for real traffic + no cold starts
     region: oregon # or `frankfurt` / `singapore` — pick closest to users
     branch: main
-    buildCommand: npm ci && npm run build
+    # Use `npm install` instead of `npm ci` to work around the long-standing
+    # npm bug where platform-specific `optionalDependencies` of packages like
+    # rollup (@rollup/rollup-linux-x64-gnu) are omitted when the lockfile was
+    # generated on a different OS (Windows/macOS dev -> Linux deploy).
+    # See: https://github.com/npm/cli/issues/4828
+    # If we ever move to a fully-Linux CI pipeline we can switch back to `npm ci`.
+    buildCommand: npm install --include=optional && npm run build
     startCommand: npm start
     healthCheckPath: /healthz
     autoDeploy: true
