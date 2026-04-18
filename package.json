@@ -12,7 +12,9 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "deploy:contracts": "tsx script/deploy.ts",
-    "compile:contracts": "tsx script/compile.ts"
+    "compile:contracts": "tsx script/compile.ts",
+    "deploy:indexes": "tsx script/deploy-indexes.ts",
+    "check:indexes": "tsx script/check-indexes.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",

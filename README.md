@@ -243,7 +243,29 @@ npm run build      # production build
 npm start          # run built server
 ```
 
-### 4. (Optional) Re-deploy contracts
+### 4. Deploy Firestore indexes (one-time per project)
+
+Every list endpoint that filters + orders (issued credentials, holder credentials, ZK proofs by prover, etc.) needs a composite index. Declared once in [`firestore.indexes.json`](./firestore.indexes.json), deployed with:
+
+```bash
+# Option A — using the existing Admin SDK service account (no CLI needed).
+# Requires the service account to have the "Cloud Datastore Index Admin"
+# IAM role granted in the GCP console.
+npm run deploy:indexes
+
+# Option B — using the Firebase CLI with your own Google account.
+# Uses your user-level permissions, which already include index admin.
+npx firebase-tools login --no-localhost
+npx firebase-tools deploy --only firestore:indexes --project <your-project-id>
+```
+
+Index builds are async — they finish in ~1 minute for small collections. Check status:
+
+```bash
+npm run check:indexes   # prints CREATING / READY for every composite index
+```
+
+### 5. (Optional) Re-deploy contracts
 
 Use this only if you want your own Sepolia deployment; by default the app talks to the already-deployed addresses listed above.
 
@@ -252,7 +274,7 @@ npm run compile:contracts    # solc → contracts/artifacts/
 npm run deploy:contracts     # writes contracts/deployment.json
 ```
 
-### 5. Deploy to Render (one-click Blueprint)
+### 6. Deploy to Render (one-click Blueprint)
 
 The repo ships with a [`render.yaml`](./render.yaml) Blueprint.
 
@@ -269,7 +291,7 @@ The repo ships with a [`render.yaml`](./render.yaml) Blueprint.
 
 Cold start on the free plan is ~30s. Bump the plan to `starter` for an always-warm instance.
 
-### 6. Export credentials in W3C VC format
+### 7. Export credentials in W3C VC format
 
 Once a credential is issued, any verifier can pull its W3C v2 representation:
 
