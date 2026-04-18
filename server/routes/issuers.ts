@@ -26,7 +26,21 @@ export function registerIssuerRoutes(app: Express) {
   app.get("/api/issuers", async (req, res) => {
     try {
       const page = await storage.listIssuersPaged(readPageOpts(req));
-      sendPage(res, page);
+
+      // Optional ?search= and ?category= filters. Post-Firestore filter for
+      // simplicity — safe while page sizes stay bounded via pagination.
+      const search = typeof req.query.search === "string" ? req.query.search.toLowerCase().trim() : "";
+      const category = typeof req.query.category === "string" ? req.query.category : "";
+      let items = page.items;
+      if (category) items = items.filter(i => i.category === category);
+      if (search) {
+        items = items.filter(i =>
+          i.name.toLowerCase().includes(search) ||
+          (i.description ?? "").toLowerCase().includes(search) ||
+          i.walletAddress.toLowerCase().includes(search),
+        );
+      }
+      sendPage(res, { items, nextCursor: page.nextCursor });
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }

@@ -29,6 +29,10 @@ export function registerZkRoutes(app: Express) {
         targetValue: z.string().max(1024).optional(),
         memberSet: z.array(z.string().max(256)).max(1024).optional(),
         selectedFields: z.array(z.string().max(64)).max(64).optional(),
+        // Proof TTL in days. Defaults to 30 (matches credential-review SLAs
+        // most fintech counterparties operate on). Cap at 365 so stale
+        // proofs don't linger forever.
+        ttlDays: z.number().int().min(1).max(365).optional().default(30),
       });
       // Prover is always the authenticated wallet.
       const data = { ...schema.parse(req.body), proverAddress: req.auth!.sub };
@@ -72,6 +76,14 @@ export function registerZkRoutes(app: Express) {
         allFields,
       });
 
+      // Compute expiry from ttlDays. Can't exceed the underlying credential's
+      // own expiry — proof outlives credential is meaningless.
+      const now = new Date();
+      const proofExpiry = new Date(now.getTime() + data.ttlDays * 86_400_000);
+      const expiresAt = credential.expiresAt && credential.expiresAt < proofExpiry
+        ? credential.expiresAt
+        : proofExpiry;
+
       const stored = await storage.createZkProof({
         credentialId: data.credentialId,
         proverAddress: data.proverAddress,
@@ -79,6 +91,7 @@ export function registerZkRoutes(app: Express) {
         publicInputs: proof.publicInputs,
         proofData: proof.proofData,
         commitment: proof.commitment,
+        expiresAt,
       });
 
       let onChainTxHash: string | null = null;
@@ -144,11 +157,44 @@ export function registerZkRoutes(app: Express) {
       const proof = await storage.getZkProof(proofId);
       if (!proof) return res.status(404).json({ message: "ZK proof not found" });
 
-      const result = verifyZkProof(proof.proofData as any, proof.publicInputs as any);
-      if (result.valid) await storage.markZkProofVerified(proof.id);
-
+      // Gather live context (credential + issuer + expiry + on-chain state)
+      // before returning a verdict — an honest cryptographic proof can still
+      // be semantically invalid if the underlying credential has been
+      // revoked, the proof has expired, or the issuer was de-listed.
+      const now = new Date();
       const credential = await storage.getCredentialById(proof.credentialId);
       const issuer = credential ? await storage.getIssuerByAddress(credential.issuerAddress) : null;
+
+      const liveStatus = {
+        proofExpired: !!proof.expiresAt && proof.expiresAt < now,
+        credentialRevoked: credential?.status !== "active",
+        credentialExpired:
+          !!credential?.expiresAt && credential.expiresAt < now,
+        issuerRevoked: !issuer?.active,
+      };
+
+      // Always run the cryptographic verifier — it's cheap and the result is
+      // part of the audit payload.
+      const cryptoResult = verifyZkProof(proof.proofData as any, proof.publicInputs as any);
+      if (cryptoResult.valid) await storage.markZkProofVerified(proof.id);
+
+      // Compose the final semantic verdict. Any live-status failure vetoes a
+      // mathematically-valid proof.
+      let valid = cryptoResult.valid;
+      let reason = cryptoResult.reason;
+      if (valid && liveStatus.proofExpired) {
+        valid = false;
+        reason = "proof has expired";
+      } else if (valid && liveStatus.credentialRevoked) {
+        valid = false;
+        reason = "underlying credential has been revoked";
+      } else if (valid && liveStatus.credentialExpired) {
+        valid = false;
+        reason = "underlying credential has expired";
+      } else if (valid && liveStatus.issuerRevoked) {
+        valid = false;
+        reason = "issuer has been de-listed";
+      }
 
       let onChainVerified: boolean | null = null;
       if (isBlockchainReady() && credential) {
@@ -164,12 +210,16 @@ export function registerZkRoutes(app: Express) {
       }
 
       res.json({
-        ...result,
+        valid,
+        reason,
+        cryptographicallyValid: cryptoResult.valid,
+        liveStatus,
         proof: {
           id: proof.id,
           proofType: proof.proofType,
           commitment: proof.commitment,
           createdAt: proof.createdAt,
+          expiresAt: proof.expiresAt,
           publicInputs: proof.publicInputs,
           onChainTxHash: proof.onChainTxHash,
           onChainStatus: proof.onChainStatus,
@@ -182,6 +232,7 @@ export function registerZkRoutes(app: Express) {
               holderAddress: credential.holderAddress,
               issuerAddress: credential.issuerAddress,
               credentialHash: credential.credentialHash,
+              expiresAt: credential.expiresAt,
             }
           : null,
         issuerName: issuer?.name || null,
@@ -198,6 +249,39 @@ export function registerZkRoutes(app: Express) {
       const { address } = req.params;
       const page = await storage.listZkProofsByProverPaged(address, readPageOpts(req));
       sendPage(res, page);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  /**
+   * Public share endpoint. Returns a pared-down, safe-to-share view of a proof
+   * so anyone with the URL can render the verify page without auth. We
+   * deliberately omit the prover's identity (proofs are pseudonymous) and the
+   * cryptographic witness (still reachable via /api/zk/verify).
+   */
+  app.get("/api/zk/share/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const proof = await storage.getZkProof(id);
+      if (!proof) return res.status(404).json({ message: "ZK proof not found" });
+
+      const credential = await storage.getCredentialById(proof.credentialId);
+      const issuer = credential ? await storage.getIssuerByAddress(credential.issuerAddress) : null;
+
+      res.json({
+        id: proof.id,
+        proofType: proof.proofType,
+        commitment: proof.commitment,
+        createdAt: proof.createdAt,
+        expiresAt: proof.expiresAt,
+        publicInputs: proof.publicInputs,
+        onChainTxHash: proof.onChainTxHash,
+        claim: credential
+          ? { type: credential.claimType, summary: credential.claimSummary }
+          : null,
+        issuer: issuer ? { name: issuer.name, active: issuer.active } : null,
+      });
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }

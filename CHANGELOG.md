@@ -12,6 +12,40 @@ Nothing pending.
 
 ---
 
+## [0.3.0] — 2026-04-18
+
+Feature wave. Semantic upgrades to make the proof/credential system behave like a real product, plus the operational endpoints needed to deploy and observe it.
+
+### Added — semantic validation
+
+- **Per-claim-type structured schemas** in `shared/claim-schemas.ts`. Known claim types (`income_verification`, `credit_score`, `age`, `kyc_verified`, `identity_verification`, `debt_ratio`, `asset_proof`) now validate with tight bounds — e.g. credit scores are bounded to `[300, 900]`, ages to `[0, 150]`, income to non-negative integers. Unknown claim types remain free-form (subject to the existing 32 KB bounded-JSON cap) so existing issuers don't break.
+- 27 new Vitest cases covering each schema's happy path, boundary values, and rejection cases. Total test count: **132**.
+
+### Added — ZK proof lifecycle
+
+- **Proof TTL.** `POST /api/zk/generate` now accepts an optional `ttlDays` (default `30`, max `365`). Proof `expiresAt` is capped by the underlying credential's own expiry so a proof can never outlive its credential.
+- **Revocation-aware verification.** `POST /api/zk/verify` now computes a composite verdict: `cryptographicallyValid` (the raw EC math) AND NOT (`proofExpired` OR `credentialRevoked` OR `credentialExpired` OR `issuerRevoked`). Response includes a `liveStatus` object so the UI can render *why* a proof was rejected even when the math checks out.
+- **Shareable verification URL.** New public endpoint `GET /api/zk/share/:id` returns a pared-down, safe-to-share view of a proof (omits prover identity, omits cryptographic witness). Enables `verify?proofId=<id>` deep links without exposing the full proof blob.
+
+### Added — operations
+
+- **Health + readiness probes.** `GET /healthz` reports uptime/version (cheap, for load balancer pings). `GET /readyz` checks upstream dependencies (Firestore + Sepolia connectivity) and returns `503 Degraded` when any check fails. Both follow Kubernetes conventions.
+- **Issuer analytics.** `GET /api/stats/issuer/:address` returns total issued, active, revoked, expired, expiring-soon counts, plus a `byClaimType` histogram for dashboard charts.
+
+### Added — UX
+
+- **Search + filter** on list endpoints:
+  - `GET /api/credentials/:address?search=<text>&claimType=<type>` — filters by claim type or full-text match on claimType/claimSummary/credentialHash.
+  - `GET /api/issuers?search=<text>&category=<cat>` — filters by category or full-text match on name/description/walletAddress.
+  - Post-Firestore in-memory filter (safe while page sizes stay bounded via cursor pagination).
+
+### Changed
+
+- `ZkProof.expiresAt` is now populated on creation (was always `null`). Existing records without it behave as "never expires" to preserve backward compatibility.
+- `/api/zk/verify` response shape: added `valid` (composite), `reason` (human-readable), `cryptographicallyValid`, `liveStatus`. Old callers reading `result.valid` still work — the field now reflects the full verdict.
+
+---
+
 ## [0.2.0] — 2026-04-18
 
 First pitch-ready release. Full hardening of the security / crypto / infra foundations.

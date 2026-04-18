@@ -3,6 +3,7 @@ import crypto from "crypto";
 import { z } from "zod";
 import { storage } from "../storage";
 import { insertCredentialSchema } from "@shared/schema";
+import { validateClaimData } from "@shared/claim-schemas";
 import {
   issueCredentialOnChain,
   revokeCredentialOnChain,
@@ -30,7 +31,23 @@ export function registerCredentialRoutes(app: Express) {
       const page = wallet.role === "root"
         ? await storage.listAllCredentialsPaged(opts)
         : await storage.listCredentialsForHolderPaged(address, opts);
-      sendPage(res, page);
+
+      // Optional in-memory filtering. We do it post-Firestore to keep the
+      // query surface tiny — current page sizes are small (<=200) so the
+      // cost is negligible. Swap for Firestore composite indexes if page
+      // sizes ever grow meaningfully.
+      const search = typeof req.query.search === "string" ? req.query.search.toLowerCase().trim() : "";
+      const claimType = typeof req.query.claimType === "string" ? req.query.claimType : "";
+      let items = page.items;
+      if (claimType) items = items.filter(c => c.claimType === claimType);
+      if (search) {
+        items = items.filter(c =>
+          c.claimType.toLowerCase().includes(search) ||
+          c.claimSummary.toLowerCase().includes(search) ||
+          c.credentialHash.toLowerCase().includes(search),
+        );
+      }
+      sendPage(res, { items, nextCursor: page.nextCursor });
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }
@@ -60,6 +77,11 @@ export function registerCredentialRoutes(app: Express) {
           body.expiresAt = new Date(body.expiresAt);
         }
         const data = insertCredentialSchema.parse(body);
+
+        // Per-claim-type structured validation. For known claim types this
+        // enforces tight bounds (credit score 300-900, income >= 0, etc.);
+        // for unknown types it's a no-op that accepts any bounded JSON.
+        data.claimData = validateClaimData(data.claimType, data.claimData);
 
         const issuer = await storage.getIssuerByAddress(data.issuerAddress);
         if (!issuer || !issuer.active) {

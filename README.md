@@ -7,7 +7,7 @@
 **Prove you qualify — without revealing what you have.**
 
 [![CI](https://github.com/nishant-uxs/krydo/actions/workflows/ci.yml/badge.svg)](https://github.com/nishant-uxs/krydo/actions/workflows/ci.yml)
-[![tests](https://img.shields.io/badge/tests-105%20passing-brightgreen)](./server/crypto/sigma.test.ts)
+[![tests](https://img.shields.io/badge/tests-132%20passing-brightgreen)](./server/crypto/sigma.test.ts)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![Network: Sepolia](https://img.shields.io/badge/network-Sepolia-627EEA?logo=ethereum&logoColor=white)](https://sepolia.etherscan.io/address/0x0BE4fE934Ff4e9B24186C1cdd0cdFe0594209821)
 [![Made with TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
@@ -293,7 +293,13 @@ krydo/
 - [x] Helmet + CORS + per-IP rate limiting + Zod everywhere
 - [x] Structured logging (pino) + request IDs
 - [x] Domain-split routes, cursor pagination, shared contract ABI
-- [x] 105 unit tests + GitHub Actions CI
+- [x] **Per-claim-type structured Zod schemas** (`income_verification`, `credit_score`, `age`, `kyc_verified`, `debt_ratio`, `asset_proof`)
+- [x] **ZK proof TTL + revocation-aware verification** (expiry + underlying credential/issuer status gates)
+- [x] **Shareable verification URLs** — public `/api/zk/share/:id` endpoint
+- [x] **Health + readiness probes** — `/healthz` + `/readyz`
+- [x] **Issuer analytics** — `/api/stats/issuer/:address`
+- [x] **Search + filter** on credential and issuer lists (`?search=`, `?claimType=`, `?category=`)
+- [x] 132 unit tests + GitHub Actions CI + coverage artifact
 
 ### Next up
 
@@ -303,7 +309,6 @@ krydo/
 - [ ] IPFS/Arweave-backed encrypted credential store (decentralize the off-chain layer)
 - [ ] Multi-sig root authority (Safe contract)
 - [ ] On-chain revocation registry for ZK proofs
-- [ ] Per-claim-type structured Zod schemas (income, credit_score, age…)
 - [ ] Subgraph for trust-tree history queries
 
 ### Known limitations
