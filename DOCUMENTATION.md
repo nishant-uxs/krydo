@@ -275,7 +275,7 @@ sequenceDiagram
     alt valid
         S->>S: upsert wallet, derive role<br/>sign JWT (HS256)
         S-->>U: { jwt, address, role, label }
-        Note over U,S: client stores JWT in memory +<br/>localStorage; sends as Bearer
+        Note over U,S: client stores JWT in memory +<br/>localStorage, sends as Bearer
     else invalid
         S-->>U: 401 Unauthorized
     end
