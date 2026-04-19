@@ -22,24 +22,17 @@
 
 ## TL;DR
 
-Krydo lets an Indian college student prove their credit score is above 700 to a lender — **without revealing the score**. Or prove their annual income is above ₹10 lakh — **without revealing the amount**. Or prove they hold a valid KYC credential from a licensed issuer — **without revealing name, Aadhaar, or PAN**.
+Krydo is a verifiable-credential system on Ethereum Sepolia. Issuers sign claims into `KrydoCredentials`; holders keep the plaintext off-chain and prove predicates over it with sigma-protocol zero-knowledge proofs (Pedersen commitments on secp256k1, Fiat–Shamir). A verifier learns whether the predicate holds — `score >= 700`, `income >= 1000000`, `issuer is whitelisted` — not the underlying value.
 
-It does this with real cryptographic **zero-knowledge proofs** (Pedersen commitments + sigma protocols on the same secp256k1 curve Ethereum uses), issued and anchored on Ethereum Sepolia via a three-tier trust hierarchy: **Root Authority → Licensed Issuers → End Users**.
-
-No passwords. No OAuth. No KYC data on our servers in cleartext. Users sign in with their Ethereum wallet (EIP-4361 SIWE), and every sensitive operation is cryptographically authenticated by their private key.
+Three contracts, one purpose each: `KrydoAuthority` owns the issuer whitelist, `KrydoCredentials` stores credential hashes and revocations, `KrydoAudit` anchors off-chain events that MetaMask would otherwise refuse to sign. Auth is EIP-4361 SIWE with a short-lived JWT. The server never holds user secrets; every state-changing action is signed by the acting wallet.
 
 ---
 
 ## The problem
 
-Every fintech product today makes users hand over raw sensitive data — income proofs, CIBIL reports, bank statements, Aadhaar/PAN numbers — to every third party that asks. That data:
+Current verification flows over-collect by default. A lender asking "do you earn at least ₹10 L?" gets the user's exact salary, employer, six months of bank statements, and often their PAN. That data leaks, gets re-sold, and can't be revoked once it's out.
 
-1. **Leaks.** Aadhaar breaches, CIBIL breaches, PAN-linked leaks are now weekly news.
-2. **Gets re-sold.** Your loan application data becomes a marketing list.
-3. **Is over-collected.** A lender asking "do you earn ≥ ₹10 L?" gets back your *exact* salary, employer, last 6 months of transactions, and PF balance.
-4. **Can't be revoked.** Once leaked, it's leaked forever.
-
-The cryptographic answer to this is **zero-knowledge proofs** — prove a *predicate* about your data, not the data itself. The practical blocker has been: no one wants to learn circuits, run trusted-setup ceremonies, or pay SNARK gas. Krydo uses sigma protocols (no trusted setup, no circuits, browser-native) to ship this *today*.
+Zero-knowledge proofs solve the shape of this problem — prove the predicate, not the value — but SNARK-based stacks force circuits, trusted setup, and non-trivial gas. Krydo takes the simpler path: sigma protocols over Pedersen commitments on the same curve Ethereum already uses. No setup ceremony, no circuit compiler, proofs generated in the browser in milliseconds, verification in the same API call that fetches the credential.
 
 ---
 
@@ -141,7 +134,6 @@ flowchart LR
 | [`SECURITY.md`](./SECURITY.md)                | security researchers       | Disclosure policy, contact, scope                                             |
 | [`DEPLOY.md`](./DEPLOY.md)                    | operators                  | Render Blueprint, Firebase indexes, env-var reference                         |
 | [`CHANGELOG.md`](./CHANGELOG.md)              | everyone                   | Release notes                                                                 |
-| [`papers/README.md`](./papers/README.md)      | academics                  | IEEE conference + journal LaTeX sources with live Sepolia gas measurements    |
 
 ---
 
@@ -268,7 +260,6 @@ krydo/
 │   └── zk-engine.ts           # high-level proof types
 ├── shared/                    # types + ABIs used by both sides
 ├── contracts/                 # .sol sources + deployment.json
-├── papers/                    # IEEE conference + journal LaTeX sources
 ├── render.yaml                # Render Blueprint
 └── DOCUMENTATION.md           # ← full architecture spec
 ```

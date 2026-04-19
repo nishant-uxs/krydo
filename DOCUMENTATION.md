@@ -210,7 +210,7 @@ classDiagram
 | `revokeCredential`               | ~30,000      |
 | `KrydoAudit.anchor` (any kind)   | 26,290–29,340|
 
-See [`papers/README.md`](./papers/README.md) for provenance.
+All numbers above are pulled from live Sepolia transactions via the Etherscan v2 API; re-run `npm run gas:report` to refresh.
 
 ### Why a separate `KrydoAudit` contract?
 
@@ -228,7 +228,6 @@ flowchart LR
     ROOT --> SHARED["shared/"]
     ROOT --> CONTRACTS["contracts/"]
     ROOT --> SCRIPT["script/"]
-    ROOT --> PAPERS["papers/"]
     ROOT --> CI[".github/workflows/"]
 
     CLIENT --> CLI_LIB["src/lib/<br/>wagmi, wallet, contracts"]
@@ -477,7 +476,7 @@ mindmap
         reveal blinding factor
     Set
       membership
-        value ∈ {s₁, s₂, …, sₖ}
+        value in member set
         k-way OR of<br/>Schnorr proofs
     Selective disclosure
       selective_disclosure
@@ -946,7 +945,6 @@ Sensitive headers (`authorization`, `cookie`) are redacted automatically.
 - **Security disclosure policy:** [`SECURITY.md`](./SECURITY.md)
 - **Deployment specifics (Render, indexes):** [`DEPLOY.md`](./DEPLOY.md)
 - **Changelog:** [`CHANGELOG.md`](./CHANGELOG.md)
-- **Academic papers (conference + journal):** [`papers/README.md`](./papers/README.md)
 
 ---
 
