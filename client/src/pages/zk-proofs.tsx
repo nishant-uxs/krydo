@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useWallet, shortenAddress } from "@/lib/wallet";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -89,6 +89,31 @@ export default function ZkProofsPage() {
     return Number.isFinite(n) ? n : null;
   }, [credentialFields]);
 
+  // A credential whose `value` is present but non-numeric (e.g. "above 650"
+  // as a string). Range / equality proofs on such values fall through to
+  // the ZK engine's hashed-scalar path, which the engine rejects for range
+  // proofs. We mirror that here so the UI can hide those options up front
+  // and surface a clear reason, instead of letting the user submit and
+  // only then see a 400.
+  const hasNonNumericValue = useMemo<boolean>(() => {
+    const v = (credentialFields as Record<string, string>).value;
+    if (v === undefined) return false;
+    const trimmed = String(v).trim();
+    if (trimmed === "") return false;
+    return !Number.isFinite(Number(trimmed));
+  }, [credentialFields]);
+
+  // Keep the selected proof type consistent with what the current
+  // credential actually supports. If the user picked range_above on a
+  // numeric credential and then swapped to a non-numeric one, bounce them
+  // to a type that still makes sense.
+  useEffect(() => {
+    if (hasNonNumericValue && (proofType === "range_above" || proofType === "range_below")) {
+      setProofType("equality");
+      setThreshold("");
+    }
+  }, [hasNonNumericValue, proofType]);
+
   const generateMutation = useMutation({
     mutationFn: async () => {
       if (!selectedCredential) throw new Error("Select a credential");
@@ -122,6 +147,20 @@ export default function ZkProofsPage() {
       }
       if (proofType === "equality") {
         if (!targetValue) throw new Error("Target value is required");
+        // For numeric credentials, refuse to generate an equality proof
+        // against a target that we already know won't match. A non-matching
+        // proof is technically valid output (verified=false) but it wastes
+        // the holder's time and produces garbage rows in their proof list.
+        // The target is public once the proof is shared anyway, so this
+        // guard doesn't leak any additional information.
+        if (credentialNumericValue !== null) {
+          const t = Number(String(targetValue).trim());
+          if (Number.isFinite(t) && t !== credentialNumericValue) {
+            throw new Error(
+              `Your credential value is ${credentialNumericValue}. Enter ${credentialNumericValue} to produce a verifiable equality proof.`,
+            );
+          }
+        }
         body.targetValue = targetValue;
       }
       if (proofType === "selective_disclosure") {
@@ -231,6 +270,12 @@ export default function ZkProofsPage() {
                   </span>
                 </p>
               )}
+              {hasNonNumericValue && (
+                <p className="text-xs text-chart-4" data-testid="text-non-numeric-warning">
+                  This credential has a non-numeric value, so range proofs are not
+                  available. Use Exact Match or Selective Disclosure instead.
+                </p>
+              )}
               <p className="font-mono text-xs text-muted-foreground">
                 Hash: {selectedCredential.credentialHash.slice(0, 24)}...
               </p>
@@ -254,11 +299,27 @@ export default function ZkProofsPage() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {(Object.entries(proofTypeLabels) as [ProofType, string][]).map(([key, label]) => (
-                  <SelectItem key={key} value={key}>
-                    {label}
-                  </SelectItem>
-                ))}
+                {/*
+                  Only expose the proof types that have a complete input UI.
+                  membership (needs a member-set editor) and non_zero (needs
+                  an explainer + dedicated button) are supported by the ZK
+                  engine but the form surface for them hasn't been built, so
+                  they're hidden to avoid dead-end UX.
+                  Range proofs are also hidden when the selected credential
+                  has a non-numeric value — the engine would reject them.
+                  See shared/schema.ts for the full supported set.
+                */}
+                {(Object.entries(proofTypeLabels) as [ProofType, string][])
+                  .filter(([key]) => {
+                    if (key === "membership" || key === "non_zero") return false;
+                    if (hasNonNumericValue && (key === "range_above" || key === "range_below")) return false;
+                    return true;
+                  })
+                  .map(([key, label]) => (
+                    <SelectItem key={key} value={key}>
+                      {label}
+                    </SelectItem>
+                  ))}
               </SelectContent>
             </Select>
           </div>
@@ -349,11 +410,20 @@ export default function ZkProofsPage() {
             <div>
               <label className="text-sm font-medium mb-2 block">Target Value</label>
               <Input
-                placeholder="Value to prove equality with"
+                placeholder={
+                  credentialNumericValue !== null
+                    ? `Must equal ${credentialNumericValue}`
+                    : "Value to prove equality with"
+                }
                 value={targetValue}
                 onChange={(e) => setTargetValue(e.target.value)}
                 data-testid="input-zk-target"
               />
+              <p className="text-xs text-muted-foreground mt-1">
+                {credentialNumericValue !== null
+                  ? `Proves your value equals this target. Must match your credential value (${credentialNumericValue}) to be verifiable.`
+                  : "Proves your credential value equals this target."}
+              </p>
             </div>
           )}
 

@@ -141,6 +141,28 @@ export const insertTransactionSchema = z.object({
 });
 export type InsertTransaction = z.infer<typeof insertTransactionSchema>;
 
+/**
+ * Deterministic sentinel used as `txHash` on Transaction rows that were
+ * created purely off-chain (e.g. ZK proof generation). All-zeros passes
+ * the 32-byte-hex shape check in `insertTransactionSchema` but is trivially
+ * distinguishable from a real Sepolia tx hash on the client, so the UI can
+ * suppress Etherscan links for these rows.
+ */
+export const OFF_CHAIN_TX_HASH =
+  "0x0000000000000000000000000000000000000000000000000000000000000000";
+
+/**
+ * True when a transaction row represents a server-only / off-chain event
+ * and MUST NOT be linked to Etherscan. Prefers the explicit
+ * `data.onChain === false` flag (set by the producer), and falls back to
+ * the all-zeros sentinel for legacy rows.
+ */
+export function isOffChainTx(tx: { txHash: string; data?: unknown }): boolean {
+  const d = tx.data as { onChain?: boolean } | null | undefined;
+  if (d && d.onChain === false) return true;
+  return tx.txHash === OFF_CHAIN_TX_HASH;
+}
+
 export const requestStatuses = ["pending", "approved", "rejected", "issued"] as const;
 export type RequestStatus = typeof requestStatuses[number];
 

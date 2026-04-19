@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Shield, Users, FileCheck, Activity, TrendingUp, Clock, Link2 } from "lucide-react";
 import type { Issuer, Credential, Transaction } from "@shared/schema";
+import { isOffChainTx } from "@shared/schema";
 import { motion } from "framer-motion";
 
 const fadeUp = {
@@ -185,7 +186,9 @@ export default function Dashboard() {
                 </div>
               ) : recentTx && recentTx.length > 0 ? (
                 <div className="space-y-3">
-                  {recentTx.slice(0, 5).map((tx) => (
+                  {recentTx.slice(0, 5).map((tx) => {
+                    const offChain = isOffChainTx(tx);
+                    return (
                     <div
                       key={tx.id}
                       className="flex items-start justify-between gap-3 py-2 border-b border-border last:border-0"
@@ -194,7 +197,7 @@ export default function Dashboard() {
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-1.5">
                           <p className="text-sm font-medium capitalize">{tx.action.replace(/_/g, " ")}</p>
-                          {tx.txHash.startsWith("0x") && tx.txHash.length === 66 && (tx.data as any)?.onChain !== false && (
+                          {!offChain && (
                             <a
                               href={`https://sepolia.etherscan.io/tx/${tx.txHash}`}
                               target="_blank"
@@ -206,15 +209,26 @@ export default function Dashboard() {
                               </Badge>
                             </a>
                           )}
+                          {offChain && (
+                            <Badge variant="secondary" className="text-[9px] bg-muted text-muted-foreground no-default-active-elevate">
+                              Off-Chain
+                            </Badge>
+                          )}
                         </div>
-                        <a
-                          href={`https://sepolia.etherscan.io/tx/${tx.txHash}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="font-mono text-[11px] text-muted-foreground truncate block hover:text-foreground transition-colors"
-                        >
-                          {tx.txHash}
-                        </a>
+                        {offChain ? (
+                          <span className="font-mono text-[11px] text-muted-foreground truncate block">
+                            {tx.txHash.slice(0, 24)}...
+                          </span>
+                        ) : (
+                          <a
+                            href={`https://sepolia.etherscan.io/tx/${tx.txHash}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="font-mono text-[11px] text-muted-foreground truncate block hover:text-foreground transition-colors"
+                          >
+                            {tx.txHash}
+                          </a>
+                        )}
                       </div>
                       <div className="text-right shrink-0">
                         <Badge variant="secondary" className="text-[10px] no-default-active-elevate">
@@ -225,7 +239,8 @@ export default function Dashboard() {
                         </p>
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               ) : (
                 <div className="text-center py-8">

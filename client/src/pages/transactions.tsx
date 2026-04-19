@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Activity, ArrowUpRight, ArrowDownLeft, ExternalLink, Link2 } from "lucide-react";
 import type { Transaction } from "@shared/schema";
+import { isOffChainTx } from "@shared/schema";
 import { motion } from "framer-motion";
 
 const ETHERSCAN_BASE = "https://sepolia.etherscan.io";
@@ -45,7 +46,10 @@ export default function TransactionsPage() {
       ) : transactions && transactions.length > 0 ? (
         <div className="space-y-2">
           {transactions.map((tx, i) => {
-            const isOnChain = tx.txHash && !tx.txHash.startsWith("0x000");
+            // Canonical detection: prefers tx.data.onChain === false, falls
+            // back to the OFF_CHAIN_TX_HASH sentinel. Much more robust than
+            // the old prefix heuristic.
+            const isOnChain = !isOffChainTx(tx);
             return (
               <motion.div
                 key={tx.id}

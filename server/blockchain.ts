@@ -248,34 +248,6 @@ function idFromString(s: string): string {
   return ethers.id(s);
 }
 
-export async function anchorZkProofOnChain(
-  proofCommitment: string,
-  credentialHash: string,
-  proofType: string,
-  proverAddress: string,
-): Promise<OnChainResult> {
-  const encoder = new ethers.AbiCoder();
-  // proofCommitment is a secp256k1 compressed point (33 bytes / 66 hex) — encode as bytes.
-  const commitmentBytes = proofCommitment.startsWith("0x")
-    ? proofCommitment
-    : "0x" + proofCommitment;
-  const data = encoder.encode(
-    ["bytes", "bytes32", "string", "address", "uint256"],
-    [
-      commitmentBytes,
-      ethers.zeroPadValue(credentialHash, 32),
-      proofType,
-      proverAddress,
-      Math.floor(Date.now() / 1000),
-    ],
-  );
-  return sendAnchor(
-    "KRYDO_ZK_PROOF_V2",
-    ethers.zeroPadValue(credentialHash, 32),
-    data,
-  );
-}
-
 export async function anchorRoleAssignmentOnChain(
   walletAddress: string,
   role: string,

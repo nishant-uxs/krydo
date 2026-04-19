@@ -1,8 +1,7 @@
 import type { Express } from "express";
-import crypto from "crypto";
 import { z } from "zod";
 import { storage } from "../storage";
-import { proofTypes } from "@shared/schema";
+import { proofTypes, OFF_CHAIN_TX_HASH } from "@shared/schema";
 import {
   verifyCredentialOnChain,
   isBlockchainReady,
@@ -149,8 +148,13 @@ export function registerZkRoutes(app: Express) {
       // share a proof with a verifier. If on-chain anchoring is ever
       // desired later, the caller can invoke POST /api/zk/:id/anchor
       // explicitly (that endpoint still exists for backwards compat).
+      //
+      // Use the shared OFF_CHAIN_TX_HASH sentinel instead of a random hash
+      // so the UI can deterministically suppress the Etherscan link (a
+      // random hash would 404 when clicked). data.onChain === false is the
+      // canonical flag; the sentinel is a secondary safety net.
       const tx = await storage.createTransaction({
-        txHash: "0x" + crypto.randomBytes(32).toString("hex"),
+        txHash: OFF_CHAIN_TX_HASH,
         action: "zk_proof_generated",
         fromAddress: data.proverAddress,
         toAddress: null,
