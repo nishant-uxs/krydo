@@ -11,7 +11,10 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![Network: Sepolia](https://img.shields.io/badge/network-Sepolia-627EEA?logo=ethereum&logoColor=white)](https://sepolia.etherscan.io/address/0x0BE4fE934Ff4e9B24186C1cdd0cdFe0594209821)
 [![Made with TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![docs](https://img.shields.io/badge/docs-DOCUMENTATION.md-blue)](./DOCUMENTATION.md)
 [![security: disclosed privately](https://img.shields.io/badge/security-disclosure%20policy-red)](./SECURITY.md)
+
+**[📖 Full Technical Documentation →](./DOCUMENTATION.md)**
 
 </div>
 
@@ -66,70 +69,79 @@ flowchart LR
     class KA,KC,ZK contract
 ```
 
-### End-to-end flow (income verification example)
-
-1. **Employer** (whitelisted issuer) signs a credential: `{ holder: 0xAlice, claimType: "annual_income", claimSummary: "INR 1,200,000" }`. Hash goes on-chain; plaintext goes into the holder's encrypted store.
-2. **Alice** wants a loan. Lender asks: "prove you earn ≥ ₹10 L."
-3. **Alice's browser** runs `proveRange(1_200_000, blinding, "range_above", threshold=1_000_000)`. Generates a Pedersen commitment `C = v·G + r·H` and a range proof that `C - 1_000_000·G` hides a non-negative value — all without ever sending `1_200_000` anywhere.
-4. **Lender** hits `POST /api/zk/verify`. Server re-runs the elliptic-curve math on the commitment + the 32-bit-decomposed range proof and responds *true* or *false*. No one, not even Krydo, sees Alice's real salary.
-5. **Audit trail:** the commitment hash is anchored on Sepolia; anyone can later verify the proof existed and was linked to a real issuer-signed credential.
-
-### The same flow as a sequence diagram
+### End-to-end (income verification)
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant Alice as Alice (browser)<br/>MetaMask
+    actor Alice as Alice<br/>(browser)
     participant Server as Krydo API
-    participant Chain as Sepolia<br/>KrydoCredentials
-    participant Lender as Lender (verifier)
+    participant Chain as Sepolia
+    actor Lender as Lender
 
-    Note over Alice,Lender: Authentication (EIP-4361 SIWE)
-    Alice->>Server: GET /api/auth/nonce
-    Server-->>Alice: { nonce }
-    Alice->>Alice: personal_sign(SIWE message)
-    Alice->>Server: POST /api/auth/verify { message, signature }
-    Server->>Server: verify signature, issue JWT
-    Server-->>Alice: { jwt }
+    Note over Alice,Chain: Issuance (once, done by employer)
+    Alice->>Chain: Employer signs KrydoCredentials.issueCredential(...)
+    Chain-->>Alice: credential hash on-chain, plaintext off-chain
 
-    Note over Alice,Chain: Credential issuance (happens once, done by employer)
-    Note right of Chain: KrydoCredentials.issueCredential(...)<br/>emits CredentialIssued event
+    Note over Alice,Lender: Proof generation (off-chain, no gas)
+    Alice->>Alice: C = v·G + r·H<br/>π = proveRange(v − threshold)
+    Alice->>Server: POST /api/zk/generate
+    Server-->>Alice: { proofId, commitment }
 
-    Note over Alice,Lender: Zero-knowledge proof generation
-    Alice->>Alice: v = 1_200_000, r = randomScalar()
-    Alice->>Alice: C = v·G + r·H<br/>π = proveRange(v − 1_000_000, r, "range_above")
-    Alice->>Server: POST /api/zk/generate<br/>Authorization: Bearer <jwt>
-    Server->>Server: verify on commitment<br/>+ bit-decomposition chain
-    Server->>Chain: anchor proof hash (self-tx with tag)
-    Chain-->>Server: tx receipt, blockNumber
-    Server-->>Alice: { proofId, commitment, txHash }
+    Note over Alice,Lender: Verification (public)
+    Alice->>Lender: share proofId
+    Lender->>Server: POST /api/zk/verify
+    Server->>Server: re-run EC math
+    Server->>Chain: check issuer still whitelisted
+    Server-->>Lender: { valid: true, reason: "v ≥ threshold" }
 
-    Note over Alice,Lender: Verification (public, no auth required)
-    Alice->>Lender: share proofId + commitment
-    Lender->>Server: POST /api/zk/verify { proofId }
-    Server->>Server: re-run EC math (sigma verify)
-    Server->>Chain: lookup anchor tx to confirm provenance
-    Server-->>Lender: { valid: true, reason: "value ≥ threshold" }
-
-    Note right of Lender: Lender now knows Alice's income ≥ ₹10L.<br/>Lender does NOT know the actual income.
+    Note right of Lender: Lender knows Alice earns ≥ ₹10L.<br/>Does NOT know actual amount.
 ```
+
+> **For deeper flows** (SIWE auth, credential request lifecycle with MetaMask rollback, two-phase issuance, sigma-protocol internals, state machines, deployment topology), see **[`DOCUMENTATION.md`](./DOCUMENTATION.md)**.
+
+### What lives where
+
+```mermaid
+flowchart LR
+    subgraph Chain["On Sepolia (public)"]
+        C1["issuer whitelist"]
+        C2["credential hash"]
+        C3["revocation events"]
+        C4["audit anchors"]
+    end
+    subgraph DB["Firestore (queryable)"]
+        D1["mirror of on-chain state"]
+        D2["credential plaintext<br/>(encrypted)"]
+        D3["ZK proof witness data"]
+        D4["request lifecycle"]
+    end
+    subgraph Never["Never persisted"]
+        N1["user private keys"]
+        N2["JWT secret"]
+    end
+    classDef chain fill:#064e3b,stroke:#34d399,color:#d1fae5
+    classDef db fill:#0f172a,stroke:#f59e0b,color:#fde68a
+    classDef never fill:#431407,stroke:#fb923c,color:#fed7aa
+    class C1,C2,C3,C4 chain
+    class D1,D2,D3,D4 db
+    class N1,N2 never
+```
+
+**Design principle:** blockchain is the source of truth for *what exists* and *who said so*. Firestore is the performance layer for *querying* and *rendering*. Losing Firestore breaks the UI; on-chain truth is intact.
 
 ---
 
-## What goes on-chain vs off-chain
+## Documentation
 
-| Data                                      | On-chain (Sepolia) | Off-chain (Firestore) |
-|-------------------------------------------|:------------------:|:---------------------:|
-| Issuer whitelist (addr, name, active?)    | ✅                 | mirror                |
-| Credential hash (`bytes32`)               | ✅                 | mirror                |
-| Credential issuer / holder / claimType    | ✅ (event)         | mirror                |
-| Credential **plaintext** (salary, name)   | ❌                 | encrypted + hashed    |
-| ZK proof commitment (anchor)              | ✅ (tagged tx)     | full proof            |
-| ZK proof witness data                     | ❌                 | ✅                    |
-| User/issuer wallet roles                  | ✅ (anchored)      | mirror                |
-| Request / approval lifecycle              | ✅ (anchored)      | mirror                |
-
-**Design principle:** blockchain is the source of truth for *what exists* and *who said so*. Firestore is the performance layer for *querying* and *rendering*. Losing Firestore ⇒ UI breaks; on-chain truth is intact.
+| Document                                      | Audience                   | What's in it                                                                  |
+|-----------------------------------------------|----------------------------|-------------------------------------------------------------------------------|
+| **[`DOCUMENTATION.md`](./DOCUMENTATION.md)**  | engineers, auditors        | 18-section architecture spec with 20+ Mermaid diagrams, full data flows, threat model, protocol internals |
+| [`CONTRIBUTING.md`](./CONTRIBUTING.md)        | contributors               | Commit conventions, test bar, PR checklist                                    |
+| [`SECURITY.md`](./SECURITY.md)                | security researchers       | Disclosure policy, contact, scope                                             |
+| [`DEPLOY.md`](./DEPLOY.md)                    | operators                  | Render Blueprint, Firebase indexes, env-var reference                         |
+| [`CHANGELOG.md`](./CHANGELOG.md)              | everyone                   | Release notes                                                                 |
+| [`papers/README.md`](./papers/README.md)      | academics                  | IEEE conference + journal LaTeX sources with live Sepolia gas measurements    |
 
 ---
 
@@ -137,44 +149,18 @@ sequenceDiagram
 
 Not SNARKs. Not hash-masking-pretending-to-be-ZK. **Real sigma protocols over Pedersen commitments on secp256k1**, with Fiat–Shamir for non-interactivity.
 
-| Proof type              | Mechanism                                                                                                   | Example use case                                   |
-|-------------------------|-------------------------------------------------------------------------------------------------------------|----------------------------------------------------|
-| `range_above`           | Bit-decomposition + per-bit OR proof of `delta = v − t` ∈ [0, 2³²)                                          | "credit score ≥ 700"                               |
-| `range_below`           | Same, on `t − v`                                                                                            | "debt ratio ≤ 40%"                                 |
-| `equality`              | Reveal blinding factor; verifier re-derives `v·G + r·H`                                                     | "I'm a resident of India"                          |
-| `membership`            | k-way OR of Schnorr proofs over `C − s_j·G`                                                                 | "citizenship ∈ {IN, US, UK}"                       |
-| `non_zero`              | Reduction to `range_above(1)`                                                                               | "I have a PAN number"                              |
-| `selective_disclosure`  | Per-field Pedersen commitments; user opens only the fields they want revealed                               | "reveal name + employer; hide salary + address"    |
+| Proof type              | Example use case                                   |
+|-------------------------|----------------------------------------------------|
+| `range_above`           | "credit score ≥ 700"                               |
+| `range_below`           | "debt ratio ≤ 40%"                                 |
+| `equality`              | "I'm a resident of India"                          |
+| `membership`            | "citizenship ∈ {IN, US, UK}"                       |
+| `non_zero`              | "I have a PAN number"                              |
+| `selective_disclosure`  | "reveal name + employer; hide salary + address"    |
 
-**Security:** soundness + honest-verifier zero-knowledge under the discrete-log assumption on secp256k1. Soundness error ≈ 2⁻²⁵⁶ per protocol step. All primitives live in [`server/crypto/`](./server/crypto/) — `ec.ts`, `pedersen.ts`, `sigma.ts` — and are covered by **51 unit tests** (of 105 total).
+**Security:** soundness + honest-verifier zero-knowledge under the discrete-log assumption on secp256k1. Soundness error ≈ 2⁻²⁵⁶ per protocol step. All primitives live in [`server/crypto/`](./server/crypto/) and are covered by **51 unit tests** (of 154 total).
 
-**Why sigma protocols and not SNARKs?**
-
-|                     | Sigma (chosen)                        | SNARKs                                  |
-|---------------------|---------------------------------------|-----------------------------------------|
-| Trusted setup       | None                                  | Yes (per-circuit or universal)          |
-| Proof size          | ~5–50 KB                              | <1 KB                                   |
-| Prover time         | <50 ms (browser)                      | 1–30 s                                  |
-| Verifier cost       | Same order as proving                 | O(1), cheap on-chain                    |
-| Flexibility         | New predicates = new Solidity? No — stays off-chain verifier     | New predicates = new circuit + ceremony |
-| Library maturity    | `@noble/curves` is audited, JS-native | `circom` + `snarkjs` / `halo2` — heavy  |
-
-For Krydo's current off-chain-verifier model, sigma wins on DX, shipping speed, and zero trusted-setup risk. Migration to a Groth16/PLONK on-chain verifier is a future wave, not a blocker.
-
----
-
-## Security posture
-
-- **Authentication:** EIP-4361 (Sign-In With Ethereum). Server issues a signed JWT on successful `personal_sign` of a nonced SIWE message. No passwords, no sessions-as-cookies, no OAuth. `@/e:/projects/Krydo/Kry-Decentralized-Infra/server/auth/siwe.ts`
-- **Authorization:** every mutation is role-gated (`root`, `issuer`, `user`) via `requireAuth` + `requireRole` + `requireSelf` middlewares. `@/e:/projects/Krydo/Kry-Decentralized-Infra/server/auth/jwt.ts`
-- **Input validation:** **every** route body/param/query is Zod-validated. No raw `req.body` consumed anywhere. `@/e:/projects/Krydo/Kry-Decentralized-Infra/server/validation/schemas.ts`
-- **Rate limiting:** per-IP `express-rate-limit` with a stricter limiter on sensitive ops (ZK proofs, credential issuance).
-- **Transport hardening:** Helmet CSP, CORS allowlist, no `x-powered-by`, HSTS in prod.
-- **Secrets:** all server-side; `.env` gitignored; JWT/session secrets validated ≥ 32 bytes at startup; Firebase service-account JSON gitignored.
-- **Observability:** structured JSON logs via `pino`, per-request `x-request-id`, redacted auth headers.
-- **Testing:** 105 unit tests, CI runs on every push/PR.
-- **Non-custodial:** server never handles user private keys; all signing happens in MetaMask.
-- **Deterministic builds:** contract ABIs + addresses imported from a single JSON source (`contracts/deployment.json`) by *both* server and client — server and browser cannot drift apart on which contract they're talking to.
+See [`DOCUMENTATION.md §9–12`](./DOCUMENTATION.md#9-zero-knowledge-proof-system) for protocol details, bit-decomposition, and performance numbers.
 
 ---
 
@@ -182,15 +168,15 @@ For Krydo's current off-chain-verifier model, sigma wins on DX, shipping speed, 
 
 | Layer                     | Choice                                                           |
 |---------------------------|------------------------------------------------------------------|
-| Smart contracts           | Solidity 0.8.x, deployed on Sepolia                              |
+| Smart contracts           | Solidity 0.8.x on Sepolia (`KrydoAuthority`, `KrydoCredentials`, `KrydoAudit`) |
 | On-chain library          | `ethers` v6                                                      |
 | Cryptography              | `@noble/curves` (secp256k1), `@noble/hashes` (SHA-256)           |
 | Backend                   | Node 20, Express, TypeScript, Zod, pino, Helmet, jsonwebtoken    |
 | Database                  | Firebase Firestore (Admin SDK)                                   |
 | Frontend                  | React 18, Vite, TanStack Query, shadcn/ui, Tailwind, wouter      |
-| Wallet                    | MetaMask (EIP-1193 via `window.ethereum`)                        |
+| Wallet                    | wagmi v2 + RainbowKit v2 (MetaMask, WalletConnect, Coinbase, Rabby, Brave, injected) |
 | Auth                      | EIP-4361 SIWE + JWT (`jsonwebtoken`)                             |
-| Testing                   | Vitest + `@vitest/coverage-v8`                                   |
+| Testing                   | Vitest + `@vitest/coverage-v8` (154 tests)                       |
 | CI                        | GitHub Actions (Node 20, typecheck + test)                       |
 
 ---
@@ -201,6 +187,7 @@ For Krydo's current off-chain-verifier model, sigma wins on DX, shipping speed, 
 |-----------------------|-------------------------------------------------------------------------------------------------|
 | `KrydoAuthority`      | [`0x0BE4fE934Ff4e9B24186C1cdd0cdFe0594209821`](https://sepolia.etherscan.io/address/0x0BE4fE934Ff4e9B24186C1cdd0cdFe0594209821) |
 | `KrydoCredentials`    | [`0xEdb9EB8966053B5dc7C6ec17C65673D919Ea77Cb`](https://sepolia.etherscan.io/address/0xEdb9EB8966053B5dc7C6ec17C65673D919Ea77Cb) |
+| `KrydoAudit`          | [`0x326b67F2a4eB4DB431825Da06BA0776f8d8A2C8e`](https://sepolia.etherscan.io/address/0x326b67F2a4eB4DB431825Da06BA0776f8d8A2C8e) |
 | Root authority wallet | [`0x4Debe0136310df354CE1E8846799409d37f704cB`](https://sepolia.etherscan.io/address/0x4Debe0136310df354CE1E8846799409d37f704cB) |
 
 ---
@@ -213,93 +200,57 @@ For Krydo's current off-chain-verifier model, sigma wins on DX, shipping speed, 
 - A Firebase project with Firestore enabled + an Admin SDK service-account JSON
 - An Alchemy API key for **Sepolia**
 - A Sepolia wallet funded with test ETH (for issuer / credential operations)
-- Any EIP-1193 wallet — MetaMask, Coinbase Wallet, Rainbow, Rabby, Brave, Frame, or a mobile wallet via WalletConnect QR
+- Any EIP-1193 wallet — MetaMask, Coinbase, Rainbow, Rabby, Brave, Frame, or mobile via WalletConnect QR
 
-### 1. Install
+### Install & run
 
 ```bash
 git clone https://github.com/nishant-uxs/krydo.git
 cd krydo
 npm install
+cp .env.example .env        # fill in values — server validates at boot
+npm run dev                 # http://localhost:5000 with HMR
 ```
 
-### 2. Configure `.env`
-
-Copy the template and fill in your values:
+Common scripts:
 
 ```bash
-cp .env.example .env
+npm test            # 154 unit tests (~16s)
+npm run check       # strict typecheck
+npm run build       # production build
+npm start           # run built server
 ```
 
-`.env.example` documents every variable (what it does, where to get it, how to generate secrets). The server validates all required vars at startup via [`server/config.ts`](./server/config.ts) — it will refuse to boot with a helpful error if anything is missing or too short.
-
-### 3. Run
+### Deploy Firestore indexes (one-time)
 
 ```bash
-npm run dev        # dev server with HMR at http://localhost:5000
-npm test           # 154 unit tests (~16s)
-npm run check      # strict typecheck
-npm run build      # production build
-npm start          # run built server
-```
-
-### 4. Deploy Firestore indexes (one-time per project)
-
-Every list endpoint that filters + orders (issued credentials, holder credentials, ZK proofs by prover, etc.) needs a composite index. Declared once in [`firestore.indexes.json`](./firestore.indexes.json), deployed with:
-
-```bash
-# Option A — using the existing Admin SDK service account (no CLI needed).
-# Requires the service account to have the "Cloud Datastore Index Admin"
-# IAM role granted in the GCP console.
+# Option A — using the app's own Admin SDK service account
 npm run deploy:indexes
 
-# Option B — using the Firebase CLI with your own Google account.
-# Uses your user-level permissions, which already include index admin.
+# Option B — using firebase-tools with your Google account
 npx firebase-tools login --no-localhost
 npx firebase-tools deploy --only firestore:indexes --project <your-project-id>
+npm run check:indexes   # prints CREATING / READY for each composite index
 ```
 
-Index builds are async — they finish in ~1 minute for small collections. Check status:
-
-```bash
-npm run check:indexes   # prints CREATING / READY for every composite index
-```
-
-### 5. (Optional) Re-deploy contracts
-
-Use this only if you want your own Sepolia deployment; by default the app talks to the already-deployed addresses listed above.
+### (Optional) Re-deploy contracts
 
 ```bash
 npm run compile:contracts    # solc → contracts/artifacts/
 npm run deploy:contracts     # writes contracts/deployment.json
 ```
 
-### 6. Deploy to Render (one-click Blueprint)
+### Deploy to Render
 
-The repo ships with a [`render.yaml`](./render.yaml) Blueprint.
+The repo ships with a [`render.yaml`](./render.yaml) Blueprint — push to GitHub, click **New +** → **Blueprint** in Render, fill in the prompted secrets (`FIREBASE_SERVICE_ACCOUNT`, `ALCHEMY_API_KEY`, `DEPLOYER_PRIVATE_KEY`, `CORS_ORIGINS`, `VITE_WALLETCONNECT_PROJECT_ID`) and apply. Full walkthrough in [`DEPLOY.md`](./DEPLOY.md).
 
-1. Push this repo to your GitHub.
-2. In the Render dashboard: **New +** → **Blueprint** → pick this repo.
-3. Fill in the secrets Render prompts for (marked `sync: false` in the blueprint):
-   - `FIREBASE_SERVICE_ACCOUNT` — paste the *entire* service-account JSON as a single string (Render doesn't mount files).
-   - `FIREBASE_PROJECT_ID`
-   - `ALCHEMY_API_KEY`
-   - `DEPLOYER_PRIVATE_KEY`
-   - `CORS_ORIGINS` — your Render URL (e.g. `https://krydo.onrender.com`).
-   - `VITE_WALLETCONNECT_PROJECT_ID` *(optional)* — enables WalletConnect v2 mobile signing.
-4. Hit **Apply**. Render runs `npm ci && npm run build`, starts with `npm start`, and uses `/healthz` as the liveness probe.
-
-Cold start on the free plan is ~30s. Bump the plan to `starter` for an always-warm instance.
-
-### 7. Export credentials in W3C VC format
-
-Once a credential is issued, any verifier can pull its W3C v2 representation:
+### Export as W3C Verifiable Credential
 
 ```bash
 curl https://krydo.onrender.com/api/credentials/<uuid>/vc
 ```
 
-Returns `application/vc+ld+json` with a `did:ethr:sepolia` subject + a Krydo on-chain anchor proof — consumable by Veramo, Ceramic, Walt.id, Microsoft Entra, or any tool that speaks the spec.
+Returns `application/vc+ld+json` with a `did:ethr:sepolia` subject and a Krydo on-chain anchor proof — consumable by Veramo, Ceramic, Walt.id, Microsoft Entra, or anything that speaks the spec.
 
 ---
 
@@ -308,33 +259,29 @@ Returns `application/vc+ld+json` with a `did:ethr:sepolia` subject + a Krydo on-
 ```
 krydo/
 ├── client/                    # React app (Vite)
-│   └── src/
-│       ├── lib/wagmi.ts       # wagmi v2 config (MetaMask, WalletConnect, Coinbase, injected)
-│       ├── lib/wallet.tsx     # Krydo WalletProvider + SIWE flow on top of wagmi
-│       ├── lib/eip1193-bridge.ts  # pluggable provider shim for contract helpers
-│       ├── lib/contracts.ts   # client-side contract interactions (wallet-agnostic)
-│       ├── pages/             # /dashboard /issuers /credentials /zk-proofs ...
-│       └── components/
 ├── server/                    # Express API
 │   ├── auth/                  # SIWE + JWT
 │   ├── crypto/                # EC math, Pedersen, sigma protocols
-│   ├── middleware/            # security, pagination, logging
-│   ├── routes/                # issuers, credentials, zk, stats, health, network
-│   ├── validation/            # Zod schemas
+│   ├── routes/                # issuers, credentials, zk, stats, health
 │   ├── blockchain.ts          # ethers + contract wrappers
 │   ├── storage.ts             # Firestore abstraction
 │   └── zk-engine.ts           # high-level proof types
-├── shared/
-│   ├── contracts.ts           # single source of truth for addresses + ABIs
-│   ├── schema.ts              # shared TS types for API
-│   ├── claim-schemas.ts       # per-claim-type Zod validators
-│   └── vc.ts                  # W3C Verifiable Credentials Data Model v2 mapper
+├── shared/                    # types + ABIs used by both sides
 ├── contracts/                 # .sol sources + deployment.json
-├── script/                    # deploy + build scripts
-├── render.yaml                # Render Blueprint (one-click deploy)
-├── .github/workflows/ci.yml   # GitHub Actions pipeline
-└── vitest.config.ts
+├── papers/                    # IEEE conference + journal LaTeX sources
+├── render.yaml                # Render Blueprint
+└── DOCUMENTATION.md           # ← full architecture spec
 ```
+
+For the detailed tree and module responsibilities see [`DOCUMENTATION.md §4`](./DOCUMENTATION.md#4-repository-layout).
+
+---
+
+## Security
+
+Defense in depth at nine layers (transport → per-IP → session → authorization → input → business → crypto → chain → data). Every route is Zod-validated, role-gated, and rate-limited. No private keys on the server; every signature happens in the user's wallet.
+
+See [`DOCUMENTATION.md §16`](./DOCUMENTATION.md#16-security-layers) for the full matrix and threat model, and [`SECURITY.md`](./SECURITY.md) for the disclosure policy.
 
 ---
 
@@ -344,25 +291,25 @@ krydo/
 
 - [x] Real ZK primitives on secp256k1 (Pedersen + sigma protocols)
 - [x] SIWE authentication + JWT
-- [x] Real on-chain block numbers (no mock receipts)
+- [x] Full SSI mode — every on-chain write goes through the user's wallet
+- [x] `KrydoAudit` contract for MetaMask-signed off-chain anchors
 - [x] Helmet + CORS + per-IP rate limiting + Zod everywhere
 - [x] Structured logging (pino) + request IDs
-- [x] Domain-split routes, cursor pagination, shared contract ABI
-- [x] **Per-claim-type structured Zod schemas** (`income_verification`, `credit_score`, `age`, `kyc_verified`, `debt_ratio`, `asset_proof`)
-- [x] **ZK proof TTL + revocation-aware verification** (expiry + underlying credential/issuer status gates)
-- [x] **Shareable verification URLs** — public `/api/zk/share/:id` endpoint
-- [x] **Health + readiness probes** — `/healthz` + `/readyz`
-- [x] **Issuer analytics** — `/api/stats/issuer/:address`
-- [x] **Search + filter** on credential and issuer lists (`?search=`, `?claimType=`, `?category=`)
-- [x] **Multi-wallet** via wagmi v2 + RainbowKit v2 — MetaMask, WalletConnect v2, Coinbase Wallet, Rainbow, Rabby, Brave, Frame, any injected EIP-1193 wallet
-- [x] **W3C Verifiable Credentials Data Model v2** export at `GET /api/credentials/:id/vc` — `did:ethr:sepolia` subjects + CAIP-2 on-chain anchor proof, consumable by Veramo / Ceramic / Walt.id / Microsoft Entra
-- [x] **One-click Render deploy** via `render.yaml` Blueprint
+- [x] Per-claim-type structured Zod schemas
+- [x] ZK proof TTL + revocation-aware verification
+- [x] Shareable verification URLs (`/api/zk/share/:id`)
+- [x] Health + readiness probes (`/healthz`, `/readyz`)
+- [x] Issuer analytics (`/api/stats/issuer/:address`)
+- [x] Search + filter on credential and issuer lists
+- [x] Multi-wallet via wagmi v2 + RainbowKit v2
+- [x] W3C Verifiable Credentials v2 export
+- [x] One-click Render deploy (`render.yaml`)
 - [x] 154 unit tests + GitHub Actions CI + coverage artifact
 
 ### Next up
 
-- [ ] On-chain Groth16/PLONK verifier contract (O(1) proof verification)
-- [ ] IPFS/Arweave-backed encrypted credential store (decentralize the off-chain layer)
+- [ ] On-chain Groth16 / PLONK verifier contract (O(1) proof verification)
+- [ ] IPFS / Arweave-backed encrypted credential store
 - [ ] Multi-sig root authority (Safe contract)
 - [ ] On-chain revocation registry for ZK proofs
 - [ ] Subgraph for trust-tree history queries
@@ -375,15 +322,13 @@ Krydo is an **MVP on testnet**. Before mainnet you should expect: a third-party 
 
 ## Contributing
 
-See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for the full guide (commit conventions, test bar, code style, PR checklist).
-
-Quick version:
+See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for the full guide. Quick version:
 
 1. Fork + branch (`git checkout -b feat/your-change`)
 2. Write tests — every new route needs Zod validation + at least one Vitest spec
 3. `npm run check && npm test` must pass
 4. Conventional Commits format (`feat(zk):`, `fix(auth):`, …)
-5. Open a PR — CI will re-run the same gates
+5. Open a PR — CI re-runs the same gates
 
 All contributions are reviewed for security first, features second.
 
@@ -401,6 +346,6 @@ All contributions are reviewed for security first, features second.
 
 **Built with cryptography, not hype.**
 
-Questions? Open an [issue](https://github.com/nishant-uxs/krydo/issues).
+For the deep dive: **[`DOCUMENTATION.md`](./DOCUMENTATION.md)** · Questions? Open an [issue](https://github.com/nishant-uxs/krydo/issues).
 
 </div>
