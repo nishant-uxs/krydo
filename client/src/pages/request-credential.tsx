@@ -108,11 +108,14 @@ export default function RequestCredentialPage() {
       // Step 2: MetaMask popup — holder signs a self-tx with encoded
       // KRYDO_CRED_REQUEST_V1 payload to anchor the request on Sepolia.
       setReqStep("Waiting for MetaMask approval...");
+      console.log("[SSI] anchorCredentialRequest params:", {
+        requestId: request.id, address, selectedClaimType,
+      });
       let txResult: { txHash: string; blockNumber: number };
       try {
         txResult = await anchorCredentialRequestViaMetaMask(
           request.id,
-          address,
+          address!,
           selectedClaimType,
           "request_created",
         );

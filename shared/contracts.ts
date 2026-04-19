@@ -22,6 +22,8 @@ export interface DeploymentInfo {
   contracts: {
     KrydoAuthority: ContractInfo;
     KrydoCredentials: ContractInfo;
+    /** Optional: present only after `npm run deploy:audit` has been run. */
+    KrydoAudit?: ContractInfo;
   };
 }
 
@@ -31,10 +33,25 @@ export const DEPLOYMENT = deployment as unknown as DeploymentInfo;
 /** Contract addresses on Sepolia. */
 export const AUTHORITY_ADDRESS = DEPLOYMENT.contracts.KrydoAuthority.address;
 export const CREDENTIALS_ADDRESS = DEPLOYMENT.contracts.KrydoCredentials.address;
+/**
+ * Empty string when the audit contract hasn't been deployed yet; code that
+ * depends on it must gate on `AUDIT_ADDRESS` being truthy.
+ */
+export const AUDIT_ADDRESS = DEPLOYMENT.contracts.KrydoAudit?.address ?? "";
 
 /** Full structured ABIs, suitable for `new ethers.Contract(addr, abi, signer)`. */
 export const AUTHORITY_ABI = DEPLOYMENT.contracts.KrydoAuthority.abi;
 export const CREDENTIALS_ABI = DEPLOYMENT.contracts.KrydoCredentials.abi;
+/**
+ * Minimal fallback ABI that matches `KrydoAudit.sol`. Used when deployment.json
+ * does not carry an audit entry yet (pre-audit-deploy bootstrap). Once the
+ * contract is deployed, the full ABI from deployment.json takes over.
+ */
+const AUDIT_FALLBACK_ABI = [
+  "event Anchor(address indexed sender, bytes32 indexed kind, bytes32 indexed id, bytes data, uint256 timestamp)",
+  "function anchor(bytes32 kind, bytes32 id, bytes data) external",
+];
+export const AUDIT_ABI = DEPLOYMENT.contracts.KrydoAudit?.abi ?? AUDIT_FALLBACK_ABI;
 
 /** Chain constants. Sepolia = 11155111 = 0xaa36a7. */
 export const SEPOLIA_CHAIN_ID_DEC = 11_155_111;

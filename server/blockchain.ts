@@ -3,8 +3,10 @@ import {
   DEPLOYMENT,
   AUTHORITY_ADDRESS,
   CREDENTIALS_ADDRESS,
+  AUDIT_ADDRESS,
   AUTHORITY_ABI,
   CREDENTIALS_ABI,
+  AUDIT_ABI,
   type DeploymentInfo,
 } from "@shared/contracts";
 
@@ -28,6 +30,7 @@ let provider: ethers.JsonRpcProvider;
 let wallet: ethers.Wallet;
 let authorityContract: ethers.Contract;
 let credentialsContract: ethers.Contract;
+let auditContract: ethers.Contract | null = null;
 let deployment: DeploymentInfo | undefined;
 
 export function getProvider() {
@@ -76,10 +79,21 @@ export async function initBlockchain() {
   authorityContract = new ethers.Contract(AUTHORITY_ADDRESS, AUTHORITY_ABI, wallet);
   credentialsContract = new ethers.Contract(CREDENTIALS_ADDRESS, CREDENTIALS_ABI, wallet);
 
+  // Audit contract is optional: server falls back to self-tx anchoring when
+  // AUDIT_ADDRESS is empty (pre-deploy-audit state).
+  if (AUDIT_ADDRESS) {
+    auditContract = new ethers.Contract(AUDIT_ADDRESS, AUDIT_ABI, wallet);
+  }
+
   console.log(`Blockchain initialized. Root: ${wallet.address}`);
   console.log(`Authority contract: ${AUTHORITY_ADDRESS}`);
   console.log(`Credentials contract: ${CREDENTIALS_ADDRESS}`);
+  console.log(`Audit contract: ${AUDIT_ADDRESS || "(not deployed — using legacy self-tx anchors)"}`);
   return true;
+}
+
+export function getAuditContract() {
+  return auditContract;
 }
 
 function resultOf(receipt: ethers.TransactionReceipt | null | undefined): OnChainResult {
@@ -199,14 +213,39 @@ export async function waitForClientTx(
   }
 }
 
-async function sendAnchor(data: string): Promise<OnChainResult> {
+/**
+ * Route an anchor payload to whichever sink is available:
+ *   - If KrydoAudit is deployed, call `auditContract.anchor(kind, id, data)`.
+ *     This is a proper contract tx that MetaMask (and any wallet) will
+ *     happily sign, and it lives as an `Anchor` event indexed by kind + id.
+ *   - Otherwise, fall back to the legacy EOA-self-tx-with-data approach,
+ *     which still works for server-signed anchors since ethers.Wallet
+ *     bypasses MetaMask's UI policy.
+ */
+async function sendAnchor(
+  kindTag: string,
+  idBytes32: string,
+  data: string,
+): Promise<OnChainResult> {
   if (!wallet || !provider) throw new Error("Blockchain not initialized");
+  if (auditContract) {
+    const kindHash = ethers.id(kindTag);
+    const tx = await auditContract.anchor(kindHash, idBytes32, data);
+    return resultOf(await tx.wait());
+  }
+  // Legacy self-tx fallback — only works for server-signed anchors because
+  // MetaMask blocks EOA->EOA transactions that carry a data payload.
   const tx = await wallet.sendTransaction({
     to: wallet.address,
     data,
     value: 0,
   });
   return resultOf(await tx.wait());
+}
+
+function idFromString(s: string): string {
+  // Pack a free-form off-chain id into a bytes32 id via keccak256.
+  return ethers.id(s);
 }
 
 export async function anchorZkProofOnChain(
@@ -221,16 +260,20 @@ export async function anchorZkProofOnChain(
     ? proofCommitment
     : "0x" + proofCommitment;
   const data = encoder.encode(
-    ["string", "bytes", "bytes32", "string", "address"],
+    ["bytes", "bytes32", "string", "address", "uint256"],
     [
-      "KRYDO_ZK_PROOF_V2",
       commitmentBytes,
       ethers.zeroPadValue(credentialHash, 32),
       proofType,
       proverAddress,
+      Math.floor(Date.now() / 1000),
     ],
   );
-  return sendAnchor(data);
+  return sendAnchor(
+    "KRYDO_ZK_PROOF_V2",
+    ethers.zeroPadValue(credentialHash, 32),
+    data,
+  );
 }
 
 export async function anchorRoleAssignmentOnChain(
@@ -240,16 +283,14 @@ export async function anchorRoleAssignmentOnChain(
 ): Promise<OnChainResult> {
   const encoder = new ethers.AbiCoder();
   const data = encoder.encode(
-    ["string", "address", "string", "string", "uint256"],
-    [
-      "KRYDO_ROLE_ASSIGN_V1",
-      walletAddress,
-      role,
-      label,
-      Math.floor(Date.now() / 1000),
-    ],
+    ["address", "string", "string", "uint256"],
+    [walletAddress, role, label, Math.floor(Date.now() / 1000)],
   );
-  return sendAnchor(data);
+  return sendAnchor(
+    "KRYDO_ROLE_ASSIGN_V1",
+    ethers.zeroPadValue(walletAddress, 32),
+    data,
+  );
 }
 
 export async function anchorCredentialRequestOnChain(
@@ -260,9 +301,8 @@ export async function anchorCredentialRequestOnChain(
 ): Promise<OnChainResult> {
   const encoder = new ethers.AbiCoder();
   const data = encoder.encode(
-    ["string", "string", "address", "string", "string", "uint256"],
+    ["string", "address", "string", "string", "uint256"],
     [
-      "KRYDO_CRED_REQUEST_V1",
       requestId,
       requesterAddress,
       claimType,
@@ -270,7 +310,7 @@ export async function anchorCredentialRequestOnChain(
       Math.floor(Date.now() / 1000),
     ],
   );
-  return sendAnchor(data);
+  return sendAnchor("KRYDO_CRED_REQUEST_V1", idFromString(requestId), data);
 }
 
 export async function anchorCredentialRenewalOnChain(
@@ -280,16 +320,19 @@ export async function anchorCredentialRenewalOnChain(
 ): Promise<OnChainResult> {
   const encoder = new ethers.AbiCoder();
   const data = encoder.encode(
-    ["string", "bytes32", "address", "uint256", "uint256"],
+    ["bytes32", "address", "uint256", "uint256"],
     [
-      "KRYDO_CRED_RENEWAL_V1",
       ethers.zeroPadValue(credentialHash, 32),
       holderAddress,
       newExpiresAt,
       Math.floor(Date.now() / 1000),
     ],
   );
-  return sendAnchor(data);
+  return sendAnchor(
+    "KRYDO_CRED_RENEWAL_V1",
+    ethers.zeroPadValue(credentialHash, 32),
+    data,
+  );
 }
 
 export async function isIssuerOnChain(address: string): Promise<boolean> {

@@ -17,12 +17,17 @@ const credentialsSource = fs.readFileSync(
   path.join(contractsDir, "KrydoCredentials.sol"),
   "utf8"
 );
+const auditSource = fs.readFileSync(
+  path.join(contractsDir, "KrydoAudit.sol"),
+  "utf8"
+);
 
 const input = {
   language: "Solidity",
   sources: {
     "KrydoAuthority.sol": { content: authoritySource },
     "KrydoCredentials.sol": { content: credentialsSource },
+    "KrydoAudit.sol": { content: auditSource },
   },
   settings: {
     outputSelection: {

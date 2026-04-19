@@ -12,6 +12,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "deploy:contracts": "tsx script/deploy.ts",
+    "deploy:audit": "tsx script/deploy-audit.ts",
     "compile:contracts": "tsx script/compile.ts",
     "deploy:indexes": "tsx script/deploy-indexes.ts",
     "check:indexes": "tsx script/check-indexes.ts"

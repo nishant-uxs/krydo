@@ -1,0 +1,66 @@
+{
+  "contractName": "KrydoAudit",
+  "abi": [
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "sender",
+          "type": "address"
+        },
+        {
+          "indexed": true,
+          "internalType": "bytes32",
+          "name": "kind",
+          "type": "bytes32"
+        },
+        {
+          "indexed": true,
+          "internalType": "bytes32",
+          "name": "id",
+          "type": "bytes32"
+        },
+        {
+          "indexed": false,
+          "internalType": "bytes",
+          "name": "data",
+          "type": "bytes"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "timestamp",
+          "type": "uint256"
+        }
+      ],
+      "name": "Anchor",
+      "type": "event"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes32",
+          "name": "kind",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "id",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "bytes",
+          "name": "data",
+          "type": "bytes"
+        }
+      ],
+      "name": "anchor",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    }
+  ],
+  "bytecode": "0x6080604052348015600e575f5ffd5b506101788061001c5f395ff3fe608060405234801561000f575f5ffd5b5060043610610029575f3560e01c80630a3bd8ec1461002d575b5f5ffd5b61004061003b36600461008f565b610042565b005b8284336001600160a01b03167fc1c35a2e2ac3c6b31b32c49829330f60e10e8d9bfda54fcad22f5f26bc022a348585426040516100819392919061010b565b60405180910390a450505050565b5f5f5f5f606085870312156100a2575f5ffd5b8435935060208501359250604085013567ffffffffffffffff8111156100c6575f5ffd5b8501601f810187136100d6575f5ffd5b803567ffffffffffffffff8111156100ec575f5ffd5b8760208284010111156100fd575f5ffd5b949793965060200194505050565b60408152826040820152828460608301375f606084830101525f6060601f19601f860116830101905082602083015294935050505056fea2646970667358221220f5968c7f4a791e59673fcf26f9aad561eb987430c91ec81c6bdced8d01bc1e9e64736f6c63430008220033"
+}

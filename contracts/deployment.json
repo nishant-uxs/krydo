@@ -1,7 +1,7 @@
 {
   "network": "sepolia",
   "deployer": "0x4Debe0136310df354CE1E8846799409d37f704cB",
-  "deployedAt": "2026-02-25T17:05:51.191Z",
+  "deployedAt": "2026-04-19T10:48:50.094Z",
   "contracts": {
     "KrydoAuthority": {
       "address": "0x0BE4fE934Ff4e9B24186C1cdd0cdFe0594209821",
@@ -631,6 +631,71 @@
             }
           ],
           "stateMutability": "view",
+          "type": "function"
+        }
+      ]
+    },
+    "KrydoAudit": {
+      "address": "0x326b67F2a4eB4DB431825Da06BA0776f8d8A2C8e",
+      "abi": [
+        {
+          "anonymous": false,
+          "inputs": [
+            {
+              "indexed": true,
+              "internalType": "address",
+              "name": "sender",
+              "type": "address"
+            },
+            {
+              "indexed": true,
+              "internalType": "bytes32",
+              "name": "kind",
+              "type": "bytes32"
+            },
+            {
+              "indexed": true,
+              "internalType": "bytes32",
+              "name": "id",
+              "type": "bytes32"
+            },
+            {
+              "indexed": false,
+              "internalType": "bytes",
+              "name": "data",
+              "type": "bytes"
+            },
+            {
+              "indexed": false,
+              "internalType": "uint256",
+              "name": "timestamp",
+              "type": "uint256"
+            }
+          ],
+          "name": "Anchor",
+          "type": "event"
+        },
+        {
+          "inputs": [
+            {
+              "internalType": "bytes32",
+              "name": "kind",
+              "type": "bytes32"
+            },
+            {
+              "internalType": "bytes32",
+              "name": "id",
+              "type": "bytes32"
+            },
+            {
+              "internalType": "bytes",
+              "name": "data",
+              "type": "bytes"
+            }
+          ],
+          "name": "anchor",
+          "outputs": [],
+          "stateMutability": "nonpayable",
           "type": "function"
         }
       ]

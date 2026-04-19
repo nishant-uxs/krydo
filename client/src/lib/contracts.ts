@@ -2,8 +2,10 @@ import { ethers } from "ethers";
 import {
   AUTHORITY_ADDRESS,
   CREDENTIALS_ADDRESS,
+  AUDIT_ADDRESS,
   AUTHORITY_ABI,
   CREDENTIALS_ABI,
+  AUDIT_ABI,
   SEPOLIA_CHAIN_ID_HEX,
   SEPOLIA_NETWORK_CONFIG,
 } from "@shared/contracts";
@@ -107,33 +109,64 @@ export async function revokeCredentialViaMetaMask(
   return { txHash: receipt.hash, blockNumber: receipt.blockNumber };
 }
 
+/**
+ * Check that KrydoAudit has been deployed and its address is baked into
+ * the shared deployment bundle. Clients that try to anchor before the
+ * contract is available get a clear error instead of a cryptic ethers
+ * failure.
+ */
+function requireAuditAddress(): string {
+  if (!AUDIT_ADDRESS) {
+    throw new Error(
+      "KrydoAudit contract is not deployed yet. Run `npm run compile:contracts && npm run deploy:audit` on the server.",
+    );
+  }
+  return AUDIT_ADDRESS;
+}
+
+/**
+ * Invoke `KrydoAudit.anchor(kind, id, data)`. This is a real contract
+ * transaction, so MetaMask (and any EIP-1193 wallet) will sign it without
+ * the "external-tx-with-data" restriction that blocks EOA->EOA anchors.
+ */
+async function callAuditAnchor(
+  kindTag: string,
+  idBytes32: string,
+  data: string,
+): Promise<{ txHash: string; blockNumber: number }> {
+  const address = requireAuditAddress();
+  const signer = await getSigner();
+  const contract = new ethers.Contract(address, AUDIT_ABI, signer);
+  const kindHash = ethers.id(kindTag);
+  const tx = await contract.anchor(kindHash, idBytes32, data);
+  const receipt = await tx.wait();
+  return { txHash: receipt!.hash, blockNumber: receipt!.blockNumber };
+}
+
 export async function anchorZkProofViaMetaMask(
   proofCommitment: string,
   credentialHash: string,
   proofType: string,
   proverAddress: string
 ): Promise<{ txHash: string; blockNumber: number }> {
-  const signer = await getSigner();
-  const encoder = ethers.AbiCoder.defaultAbiCoder();
-  const data = encoder.encode(
-    ["string", "bytes32", "bytes32", "string", "address"],
+  const commitmentBytes = proofCommitment.startsWith("0x")
+    ? proofCommitment
+    : "0x" + proofCommitment;
+  const data = ethers.AbiCoder.defaultAbiCoder().encode(
+    ["bytes", "bytes32", "string", "address", "uint256"],
     [
-      "KRYDO_ZK_PROOF_V1",
-      ethers.zeroPadValue(proofCommitment, 32),
+      commitmentBytes,
       ethers.zeroPadValue(credentialHash, 32),
       proofType,
-      proverAddress,
-    ]
+      ethers.getAddress(proverAddress),
+      Math.floor(Date.now() / 1000),
+    ],
   );
-
-  const signerAddress = await signer.getAddress();
-  const tx = await signer.sendTransaction({
-    to: signerAddress,
+  return callAuditAnchor(
+    "KRYDO_ZK_PROOF_V2",
+    ethers.zeroPadValue(credentialHash, 32),
     data,
-    value: 0,
-  });
-  const receipt = await tx.wait();
-  return { txHash: receipt!.hash, blockNumber: receipt!.blockNumber };
+  );
 }
 
 export async function anchorRoleViaMetaMask(
@@ -141,29 +174,20 @@ export async function anchorRoleViaMetaMask(
   role: string,
   label: string
 ): Promise<{ txHash: string; blockNumber: number }> {
-  await ensureSepoliaNetwork();
-  const provider = getProvider();
-  const signer = await provider.getSigner();
-
-  const encoder = new ethers.AbiCoder();
-  const data = encoder.encode(
-    ["string", "address", "string", "string", "uint256"],
+  const data = ethers.AbiCoder.defaultAbiCoder().encode(
+    ["address", "string", "string", "uint256"],
     [
-      "KRYDO_ROLE_ASSIGN_V1",
-      walletAddress,
+      ethers.getAddress(walletAddress),
       role,
       label,
       Math.floor(Date.now() / 1000),
-    ]
+    ],
   );
-
-  const tx = await signer.sendTransaction({
-    to: await signer.getAddress(),
+  return callAuditAnchor(
+    "KRYDO_ROLE_ASSIGN_V1",
+    ethers.zeroPadValue(walletAddress, 32),
     data,
-    value: 0,
-  });
-  const receipt = await tx.wait();
-  return { txHash: receipt!.hash, blockNumber: receipt!.blockNumber };
+  );
 }
 
 export async function anchorCredentialRequestViaMetaMask(
@@ -172,30 +196,42 @@ export async function anchorCredentialRequestViaMetaMask(
   claimType: string,
   action: string
 ): Promise<{ txHash: string; blockNumber: number }> {
-  await ensureSepoliaNetwork();
-  const provider = getProvider();
-  const signer = await provider.getSigner();
-
-  const encoder = new ethers.AbiCoder();
-  const data = encoder.encode(
-    ["string", "string", "address", "string", "string", "uint256"],
+  const data = ethers.AbiCoder.defaultAbiCoder().encode(
+    ["string", "address", "string", "string", "uint256"],
     [
-      "KRYDO_CRED_REQUEST_V1",
-      requestId,
-      requesterAddress,
+      String(requestId),
+      ethers.getAddress(requesterAddress),
       claimType,
       action,
       Math.floor(Date.now() / 1000),
-    ]
+    ],
   );
-
-  const tx = await signer.sendTransaction({
-    to: await signer.getAddress(),
+  return callAuditAnchor(
+    "KRYDO_CRED_REQUEST_V1",
+    ethers.id(String(requestId)),
     data,
-    value: 0,
-  });
-  const receipt = await tx.wait();
-  return { txHash: receipt!.hash, blockNumber: receipt!.blockNumber };
+  );
+}
+
+export async function anchorCredentialRenewalViaMetaMask(
+  credentialHash: string,
+  holderAddress: string,
+  newExpiresAt: number,
+): Promise<{ txHash: string; blockNumber: number }> {
+  const data = ethers.AbiCoder.defaultAbiCoder().encode(
+    ["bytes32", "address", "uint256", "uint256"],
+    [
+      ethers.zeroPadValue(credentialHash, 32),
+      ethers.getAddress(holderAddress),
+      newExpiresAt,
+      Math.floor(Date.now() / 1000),
+    ],
+  );
+  return callAuditAnchor(
+    "KRYDO_CRED_RENEWAL_V1",
+    ethers.zeroPadValue(credentialHash, 32),
+    data,
+  );
 }
 
 export async function verifyCredentialOnChainView(
