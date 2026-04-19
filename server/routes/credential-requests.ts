@@ -173,6 +173,53 @@ export function registerCredentialRequestRoutes(app: Express) {
     }
   });
 
+  /**
+   * Delete a credential request. Used by the Full-SSI client flow to roll
+   * back a request when the holder cancels the MetaMask anchor popup —
+   * otherwise an un-anchored, un-wanted request would linger in the
+   * issuer's pending queue.
+   *
+   * Hard constraints:
+   *   - Only the requester (or root) can delete their own request.
+   *   - Only `pending` requests are deletable; once approved / rejected /
+   *     issued the audit trail is preserved.
+   *   - Requests that already carry a confirmed on-chain anchor cannot be
+   *     deleted (we don't erase anchored history, even when pending).
+   */
+  app.delete("/api/credential-requests/:id", requireAuth, sensitiveLimiter, async (req, res) => {
+    try {
+      const id = req.params.id as string;
+      const request = await storage.getCredentialRequest(id);
+      if (!request) return res.status(404).json({ message: "Request not found" });
+
+      const caller = req.auth!.sub.toLowerCase();
+      const isOwner = request.requesterAddress.toLowerCase() === caller;
+      const isRoot = req.auth!.role === "root";
+      if (!isOwner && !isRoot) {
+        return res.status(403).json({ message: "Only the requester can delete this request" });
+      }
+
+      if (request.status !== "pending") {
+        return res.status(409).json({
+          message: `Cannot delete request in status '${request.status}'. Only pending requests can be deleted.`,
+        });
+      }
+
+      if (request.onChainTxHash) {
+        return res.status(409).json({
+          message: "Request already anchored on-chain and cannot be deleted.",
+        });
+      }
+
+      await storage.deleteCredentialRequest(id);
+      log.info({ requestId: id, deletedBy: caller }, "credential request deleted");
+      res.json({ success: true, id });
+    } catch (error: any) {
+      log.error({ err: error.message }, "failed to delete credential request");
+      res.status(500).json({ message: error.message });
+    }
+  });
+
   app.get("/api/credential-requests/user/:address", async (req, res) => {
     try {
       const { address } = req.params;

@@ -237,6 +237,7 @@ export interface IStorage {
   getPendingRequestsForCategory(category: string): Promise<CredentialRequest[]>;
   updateCredentialRequestStatus(id: string, status: string, responseMessage?: string, credentialId?: string): Promise<CredentialRequest>;
   lockRequestForIssuing(id: string): Promise<boolean>;
+  deleteCredentialRequest(id: string): Promise<void>;
 
   renewCredential(id: string, newExpiresAt: Date): Promise<Credential>;
 
@@ -824,6 +825,10 @@ export class FirestoreStorage implements IStorage {
 
   async updateCredentialRequestOnChainTxHash(id: string, txHash: string): Promise<void> {
     await collections.credentialRequests.doc(id).update({ onChainTxHash: txHash });
+  }
+
+  async deleteCredentialRequest(id: string): Promise<void> {
+    await collections.credentialRequests.doc(id).delete();
   }
 
   // ----- paginated list implementations -----

@@ -108,9 +108,6 @@ export default function RequestCredentialPage() {
       // Step 2: MetaMask popup — holder signs a self-tx with encoded
       // KRYDO_CRED_REQUEST_V1 payload to anchor the request on Sepolia.
       setReqStep("Waiting for MetaMask approval...");
-      console.log("[SSI] anchorCredentialRequest params:", {
-        requestId: request.id, address, selectedClaimType,
-      });
       let txResult: { txHash: string; blockNumber: number };
       try {
         txResult = await anchorCredentialRequestViaMetaMask(
@@ -120,13 +117,20 @@ export default function RequestCredentialPage() {
           "request_created",
         );
       } catch (err: any) {
-        if (err.code === 4001 || err.code === "ACTION_REJECTED") {
-          toast({
-            title: "Anchor signing skipped",
-            description: "Request created but not anchored on-chain.",
-            variant: "destructive",
-          });
-          return { ...request, anchorSkipped: true };
+        // MetaMask cancel / rejection — roll back the pending request on
+        // the server so the issuer never sees an un-anchored, un-consented
+        // request. Any other error also rolls back to keep the UI
+        // consistent with the user's intent.
+        const isUserRejection =
+          err?.code === 4001 || err?.code === "ACTION_REJECTED";
+        setReqStep("Rolling back...");
+        try {
+          await apiRequest("DELETE", `/api/credential-requests/${request.id}`);
+        } catch (delErr: any) {
+          console.warn("Rollback DELETE failed:", delErr?.message);
+        }
+        if (isUserRejection) {
+          throw new Error("Signing cancelled. Request was not submitted.");
         }
         throw err;
       }
