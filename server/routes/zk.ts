@@ -4,7 +4,6 @@ import { z } from "zod";
 import { storage } from "../storage";
 import { proofTypes } from "@shared/schema";
 import {
-  anchorZkProofOnChain,
   verifyCredentialOnChain,
   isBlockchainReady,
 } from "../blockchain";
@@ -66,6 +65,28 @@ export function registerZkRoutes(app: Express) {
       };
       const claimValue = claimData?.value || "";
 
+      // Defense-in-depth: reject range proofs whose threshold exceeds the
+      // holder's actual numeric value. The UI blocks this too, but a direct
+      // API caller must not be able to bypass the cap. Only applies when the
+      // credential's claimValue parses as a finite number; non-numeric
+      // values fall through to the engine, which rejects range proofs on
+      // hashed values with its own error.
+      if (data.proofType === "range_above" || data.proofType === "range_below") {
+        const numeric = Number(String(claimValue).trim());
+        if (Number.isFinite(numeric) && data.threshold !== undefined) {
+          if (data.proofType === "range_above" && data.threshold > numeric) {
+            return res.status(400).json({
+              message: `Threshold ${data.threshold} exceeds credential value ${numeric}. Cannot prove a claim stronger than the credential itself.`,
+            });
+          }
+          if (data.proofType === "range_below" && data.threshold < numeric) {
+            return res.status(400).json({
+              message: `Threshold ${data.threshold} is below credential value ${numeric}. Cannot prove a claim stronger than the credential itself.`,
+            });
+          }
+        }
+      }
+
       let allFields: Record<string, string> | undefined;
       if (claimData?.fields) allFields = claimData.fields;
       else if (claimData?.value) allFields = { value: claimData.value };
@@ -99,34 +120,13 @@ export function registerZkRoutes(app: Express) {
         expiresAt,
       });
 
-      let onChainTxHash: string | null = null;
-      let onChainBlockNumber: string | null = null;
-
-      // Full-SSI: skip server-side anchoring — client will sign a self-tx
-      // via MetaMask and POST /api/zk/:id/anchor afterwards.
-      if (!data.clientWillAnchor && isBlockchainReady()) {
-        try {
-          const r = await anchorZkProofOnChain(
-            proof.commitment,
-            credential.credentialHash,
-            data.proofType,
-            data.proverAddress,
-          );
-          onChainTxHash = r.txHash;
-          onChainBlockNumber = r.blockNumber;
-          await storage.updateZkProofOnChain(stored.id, r.txHash);
-          log.info(
-            { txHash: r.txHash, blockNumber: r.blockNumber, proofId: stored.id },
-            "ZK proof anchored on-chain (server)",
-          );
-        } catch (err: any) {
-          log.error({ err: err.message, proofId: stored.id }, "ZK proof on-chain anchoring failed");
-          await storage.markZkProofOnChainFailed(stored.id);
-        }
-      }
-
+      // ZK proofs are generated off-chain by design: the holder does not
+      // need to pay gas or reveal the commitment to the network just to
+      // share a proof with a verifier. If on-chain anchoring is ever
+      // desired later, the caller can invoke POST /api/zk/:id/anchor
+      // explicitly (that endpoint still exists for backwards compat).
       const tx = await storage.createTransaction({
-        txHash: onChainTxHash || "0x" + crypto.randomBytes(32).toString("hex"),
+        txHash: "0x" + crypto.randomBytes(32).toString("hex"),
         action: "zk_proof_generated",
         fromAddress: data.proverAddress,
         toAddress: null,
@@ -135,9 +135,9 @@ export function registerZkRoutes(app: Express) {
           proofType: data.proofType,
           credentialId: data.credentialId,
           commitment: proof.commitment,
-          onChain: !!onChainTxHash,
+          onChain: false,
         },
-        blockNumber: onChainBlockNumber || "0",
+        blockNumber: "0",
       });
 
       res.json({
@@ -145,9 +145,10 @@ export function registerZkRoutes(app: Express) {
         verified: proof.verified,
         claimType: credential.claimType,
         claimSummary: credential.claimSummary,
-        // Echo back what client needs to sign its own anchor tx.
+        // credentialHash is still echoed back in case the caller decides
+        // to anchor later via POST /api/zk/:id/anchor.
         credentialHash: credential.credentialHash,
-        onChainTxHash,
+        onChainTxHash: null,
         txHash: tx.txHash,
       });
     } catch (error: any) {

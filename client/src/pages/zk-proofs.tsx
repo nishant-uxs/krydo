@@ -41,7 +41,6 @@ import type { Credential, ZkProof } from "@shared/schema";
 import { proofTypeLabels, claimTypeLabels, type ProofType, type ClaimType } from "@shared/schema";
 import { motion } from "framer-motion";
 import { QrCodeCanvas } from "@/components/qr-code-canvas";
-import { anchorZkProofViaMetaMask } from "@/lib/contracts";
 
 export default function ZkProofsPage() {
   const { address } = useWallet();
@@ -76,8 +75,15 @@ export default function ZkProofsPage() {
 
   const activeCredentials = credentials?.filter((c) => c.status === "active") || [];
 
-  // Progress indicator for the 3-step full-SSI flow: generate → sign → anchor.
-  const [genStep, setGenStep] = useState<string>("");
+  // The holder's underlying numeric claim value (if any). Shown in the UI
+  // so the holder knows what range thresholds are sensible, and used below
+  // to cap threshold input so they can't claim more than they hold.
+  const credentialNumericValue = useMemo<number | null>(() => {
+    const v = (credentialFields as Record<string, string>).value;
+    if (v === undefined) return null;
+    const n = Number(String(v).trim());
+    return Number.isFinite(n) ? n : null;
+  }, [credentialFields]);
 
   const generateMutation = useMutation({
     mutationFn: async () => {
@@ -88,12 +94,27 @@ export default function ZkProofsPage() {
         credentialId: selectedCredential.id,
         proverAddress: address,
         proofType,
-        // Full-SSI: tell the server not to anchor; we'll sign from MetaMask.
-        clientWillAnchor: true,
       };
       if (proofType === "range_above" || proofType === "range_below") {
         if (!threshold) throw new Error("Threshold is required for range proofs");
-        body.threshold = parseFloat(threshold);
+        const t = parseFloat(threshold);
+        if (!Number.isFinite(t)) throw new Error("Threshold must be a valid number");
+        // Cap threshold against the actual credential value so the holder
+        // cannot generate a cryptographically valid proof claiming more
+        // than they hold. The server enforces the same rule as a backstop.
+        if (credentialNumericValue !== null) {
+          if (proofType === "range_above" && t > credentialNumericValue) {
+            throw new Error(
+              `Your credential value is ${credentialNumericValue}. You can only prove thresholds up to ${credentialNumericValue}.`,
+            );
+          }
+          if (proofType === "range_below" && t < credentialNumericValue) {
+            throw new Error(
+              `Your credential value is ${credentialNumericValue}. You can only prove thresholds at or above ${credentialNumericValue}.`,
+            );
+          }
+        }
+        body.threshold = t;
       }
       if (proofType === "equality") {
         if (!targetValue) throw new Error("Target value is required");
@@ -104,77 +125,25 @@ export default function ZkProofsPage() {
         body.selectedFields = selectedFields;
       }
 
-      setGenStep("Generating zero-knowledge proof...");
+      // ZK proofs are generated off-chain — no MetaMask popup, no on-chain
+      // anchor. The holder can share the proof with verifiers directly.
       const res = await apiRequest("POST", "/api/zk/generate", body);
-      const proof = await res.json();
-
-      // proof.commitment is the Pedersen commitment C = vG + rH (33-byte EC point).
-      // proof.credentialHash echoed back so the holder's anchor tx binds the
-      // proof to the underlying credential.
-      if (!proof?.commitment || !proof?.credentialHash) {
-        // Server didn't return anchor inputs — fall back to non-anchored proof.
-        console.warn("Server did not return commitment/credentialHash; skipping on-chain anchor");
-        return { ...proof, anchorSkipped: true };
-      }
-
-      setGenStep("Waiting for MetaMask approval...");
-      let txResult: { txHash: string; blockNumber: number };
-      try {
-        txResult = await anchorZkProofViaMetaMask(
-          proof.commitment,
-          proof.credentialHash,
-          proofType,
-          address,
-        );
-      } catch (err: any) {
-        if (err.code === 4001 || err.code === "ACTION_REJECTED") {
-          // User bailed on the popup. Proof itself is still stored — they
-          // can share it, but it won't show as anchored until they re-sign.
-          toast({
-            title: "Anchor signing skipped",
-            description: "Proof generated but not anchored on-chain. Share/verify still works; re-anchor later if needed.",
-            variant: "destructive",
-          });
-          return { ...proof, anchorSkipped: true };
-        }
-        throw err;
-      }
-
-      setGenStep("Recording anchor on Sepolia...");
-      try {
-        const anchorRes = await apiRequest("POST", `/api/zk/${proof.id}/anchor`, {
-          txHash: txResult.txHash,
-        });
-        const anchorJson = await anchorRes.json();
-        return {
-          ...proof,
-          onChainTxHash: txResult.txHash,
-          blockNumber: anchorJson.blockNumber || txResult.blockNumber,
-        };
-      } catch (err: any) {
-        console.warn("Anchor tx hash PATCH failed:", err?.message);
-        return { ...proof, onChainTxHash: txResult.txHash };
-      }
+      return await res.json();
     },
     onSuccess: (data) => {
-      setGenStep("");
       setGeneratedProof(data);
       setProofDialogOpen(true);
       queryClient.invalidateQueries({ queryKey: ["/api/zk/proofs"] });
       queryClient.invalidateQueries({ queryKey: ["/api/transactions"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      const anchoredSuffix = data.anchorSkipped
-        ? " (not anchored on-chain)"
-        : " and anchored on Sepolia";
       toast({
         title: "ZK Proof Generated",
         description: data.verified
-          ? `Proof verified${anchoredSuffix}`
-          : `Proof generated but claim does NOT satisfy the condition${anchoredSuffix}`,
+          ? "Proof verified."
+          : "Proof generated but claim does NOT satisfy the condition.",
       });
     },
     onError: (error: Error) => {
-      setGenStep("");
       toast({ title: "Failed to generate proof", description: error.message, variant: "destructive" });
     },
   });
@@ -245,6 +214,14 @@ export default function ZkProofsPage() {
                 )}
               </div>
               <p className="text-muted-foreground">{selectedCredential.claimSummary}</p>
+              {credentialNumericValue !== null && (
+                <p className="text-sm">
+                  <span className="text-muted-foreground">Your value: </span>
+                  <span className="font-semibold" data-testid="text-cred-value">
+                    {credentialNumericValue}
+                  </span>
+                </p>
+              )}
               <p className="font-mono text-xs text-muted-foreground">
                 Hash: {selectedCredential.credentialHash.slice(0, 24)}...
               </p>
@@ -325,12 +302,26 @@ export default function ZkProofsPage() {
                 placeholder={proofType === "range_above" ? "e.g. 700 (prove value >= this)" : "e.g. 50 (prove value <= this)"}
                 value={threshold}
                 onChange={(e) => setThreshold(e.target.value)}
+                max={
+                  proofType === "range_above" && credentialNumericValue !== null
+                    ? credentialNumericValue
+                    : undefined
+                }
+                min={
+                  proofType === "range_below" && credentialNumericValue !== null
+                    ? credentialNumericValue
+                    : undefined
+                }
                 data-testid="input-zk-threshold"
               />
               <p className="text-xs text-muted-foreground mt-1">
                 {proofType === "range_above"
-                  ? "Proves your credential value is at or above this threshold without revealing the exact value"
-                  : "Proves your credential value is at or below this threshold without revealing the exact value"}
+                  ? credentialNumericValue !== null
+                    ? `Prove your value is at or above this threshold. Max allowed: ${credentialNumericValue} (your actual value).`
+                    : "Proves your credential value is at or above this threshold without revealing the exact value"
+                  : credentialNumericValue !== null
+                    ? `Prove your value is at or below this threshold. Min allowed: ${credentialNumericValue} (your actual value).`
+                    : "Proves your credential value is at or below this threshold without revealing the exact value"}
               </p>
             </div>
           )}
@@ -356,12 +347,12 @@ export default function ZkProofsPage() {
             {generateMutation.isPending ? (
               <>
                 <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                {genStep || "Generating ZK Proof..."}
+                Generating ZK Proof...
               </>
             ) : (
               <>
                 <Fingerprint className="w-4 h-4 mr-2" />
-                Generate & Sign On-Chain
+                Generate Proof
               </>
             )}
           </Button>
