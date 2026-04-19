@@ -78,10 +78,14 @@ export default function ZkProofsPage() {
   // The holder's underlying numeric claim value (if any). Shown in the UI
   // so the holder knows what range thresholds are sensible, and used below
   // to cap threshold input so they can't claim more than they hold.
+  // Empty strings must return null (not 0) — Number('') === 0 would show
+  // "Your value: 0" for credentials with no numeric value.
   const credentialNumericValue = useMemo<number | null>(() => {
     const v = (credentialFields as Record<string, string>).value;
     if (v === undefined) return null;
-    const n = Number(String(v).trim());
+    const trimmed = String(v).trim();
+    if (trimmed === "") return null;
+    const n = Number(trimmed);
     return Number.isFinite(n) ? n : null;
   }, [credentialFields]);
 

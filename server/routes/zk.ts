@@ -68,11 +68,16 @@ export function registerZkRoutes(app: Express) {
       // Defense-in-depth: reject range proofs whose threshold exceeds the
       // holder's actual numeric value. The UI blocks this too, but a direct
       // API caller must not be able to bypass the cap. Only applies when the
-      // credential's claimValue parses as a finite number; non-numeric
-      // values fall through to the engine, which rejects range proofs on
-      // hashed values with its own error.
+      // credential's claimValue parses as a finite number; non-numeric or
+      // empty values fall through to the engine, which rejects range proofs
+      // on hashed values with its own error.
+      //
+      // Important: an empty string MUST NOT be coerced to 0 (Number('') === 0),
+      // otherwise a credential with no value would cap every range_above to
+      // threshold ≤ 0 and break the flow.
       if (data.proofType === "range_above" || data.proofType === "range_below") {
-        const numeric = Number(String(claimValue).trim());
+        const trimmed = String(claimValue).trim();
+        const numeric = trimmed === "" ? NaN : Number(trimmed);
         if (Number.isFinite(numeric) && data.threshold !== undefined) {
           if (data.proofType === "range_above" && data.threshold > numeric) {
             return res.status(400).json({
