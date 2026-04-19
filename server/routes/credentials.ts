@@ -426,7 +426,7 @@ export function registerCredentialRoutes(app: Express) {
   app.post("/api/credentials/:id/renew", requireAuth, sensitiveLimiter, async (req, res) => {
     try {
       const id = req.params.id as string;
-      const { expiresAt } = req.body;
+      const { expiresAt, clientWillAnchor, onChainTxHash: clientTxHash } = req.body;
       const renewedBy = req.auth!.sub;
 
       const credential = await storage.getCredentialById(id);
@@ -445,9 +445,14 @@ export function registerCredentialRoutes(app: Express) {
         : new Date(Date.now() + 180 * 24 * 60 * 60 * 1000);
       const renewed = await storage.renewCredential(id, newExpiry);
 
-      let onChainTxHash: string | null = null;
+      let onChainTxHash: string | null = clientTxHash || null;
       let onChainBlockNumber: string | null = null;
-      if (isBlockchainReady()) {
+
+      // Full-SSI: if client already signed the anchor or will sign later,
+      // skip server-side on-chain anchoring.
+      if (clientTxHash) {
+        log.info({ txHash: clientTxHash }, "credential renewal anchored on-chain (MetaMask)");
+      } else if (!clientWillAnchor && isBlockchainReady()) {
         try {
           const r = await anchorCredentialRenewalOnChain(
             credential.credentialHash,
@@ -456,7 +461,7 @@ export function registerCredentialRoutes(app: Express) {
           );
           onChainTxHash = r.txHash;
           onChainBlockNumber = r.blockNumber;
-          log.info({ txHash: r.txHash, blockNumber: r.blockNumber }, "credential renewal anchored on-chain");
+          log.info({ txHash: r.txHash, blockNumber: r.blockNumber }, "credential renewal anchored on-chain (server)");
         } catch (err: any) {
           log.error({ err: err.message }, "credential renewal on-chain anchoring failed");
         }
@@ -476,7 +481,9 @@ export function registerCredentialRoutes(app: Express) {
         blockNumber: onChainBlockNumber || "0",
       });
 
-      res.json({ ...renewed, onChainTxHash });
+      // Echo back credentialHash so the client can sign its own anchor tx
+      // when clientWillAnchor is true.
+      res.json({ ...renewed, credentialHash: credential.credentialHash, onChainTxHash });
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }

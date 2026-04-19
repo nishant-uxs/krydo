@@ -47,6 +47,7 @@ import {
 import type { Issuer, CredentialRequest } from "@shared/schema";
 import { useState, useMemo } from "react";
 import { motion } from "framer-motion";
+import { anchorCredentialRequestViaMetaMask } from "@/lib/contracts";
 
 export default function RequestCredentialPage() {
   const { address } = useWallet();
@@ -84,27 +85,75 @@ export default function RequestCredentialPage() {
     return categoryClaimTypes[cat] || claimTypes;
   }, [selectedIssuer]);
 
+  const [reqStep, setReqStep] = useState<string>("");
+
   const requestMutation = useMutation({
     mutationFn: async () => {
       if (!selectedClaimType) throw new Error("Select a credential type");
+      if (!address) throw new Error("Wallet not connected");
+
+      // Step 1: POST request with clientWillAnchor — server stores it but
+      // skips server-side on-chain anchoring.
+      setReqStep("Creating request...");
       const res = await apiRequest("POST", "/api/credential-requests", {
         requesterAddress: address,
         claimType: selectedClaimType,
         issuerCategory: selectedIssuer?.category || null,
         issuerAddress: selectedIssuer?.walletAddress || null,
         message: requestMessage || null,
+        clientWillAnchor: true,
       });
-      return res.json();
+      const request = await res.json();
+
+      // Step 2: MetaMask popup — holder signs a self-tx with encoded
+      // KRYDO_CRED_REQUEST_V1 payload to anchor the request on Sepolia.
+      setReqStep("Waiting for MetaMask approval...");
+      let txResult: { txHash: string; blockNumber: number };
+      try {
+        txResult = await anchorCredentialRequestViaMetaMask(
+          request.id,
+          address,
+          selectedClaimType,
+          "request_created",
+        );
+      } catch (err: any) {
+        if (err.code === 4001 || err.code === "ACTION_REJECTED") {
+          toast({
+            title: "Anchor signing skipped",
+            description: "Request created but not anchored on-chain.",
+            variant: "destructive",
+          });
+          return { ...request, anchorSkipped: true };
+        }
+        throw err;
+      }
+
+      // Step 3: POST anchor tx hash to server — server verifies the
+      // Sepolia receipt and persists it against the request.
+      setReqStep("Recording anchor on Sepolia...");
+      try {
+        await apiRequest("POST", `/api/credential-requests/${request.id}/anchor`, {
+          txHash: txResult.txHash,
+        });
+      } catch (err: any) {
+        console.warn("Request anchor PATCH failed:", err?.message);
+      }
+
+      return { ...request, onChainTxHash: txResult.txHash };
     },
     onSuccess: () => {
+      setReqStep("");
       queryClient.invalidateQueries({ queryKey: ["/api/credential-requests/user"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/transactions"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       setRequestDialogOpen(false);
       setSelectedIssuer(null);
       setSelectedClaimType("");
       setRequestMessage("");
-      toast({ title: "Request sent", description: "Your credential request has been submitted to the issuer." });
+      toast({ title: "Request sent & anchored", description: "Your credential request has been submitted and recorded on-chain." });
     },
     onError: (error: Error) => {
+      setReqStep("");
       toast({ title: "Request failed", description: error.message, variant: "destructive" });
     },
   });
@@ -381,12 +430,12 @@ export default function RequestCredentialPage() {
               {requestMutation.isPending ? (
                 <>
                   <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  Submitting...
+                  {reqStep || "Submitting..."}
                 </>
               ) : (
                 <>
                   <Send className="w-4 h-4 mr-2" />
-                  Submit Request
+                  Submit & Sign On-Chain
                 </>
               )}
             </Button>
