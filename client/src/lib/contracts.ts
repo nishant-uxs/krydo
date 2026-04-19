@@ -143,32 +143,6 @@ async function callAuditAnchor(
   return { txHash: receipt!.hash, blockNumber: receipt!.blockNumber };
 }
 
-export async function anchorZkProofViaMetaMask(
-  proofCommitment: string,
-  credentialHash: string,
-  proofType: string,
-  proverAddress: string
-): Promise<{ txHash: string; blockNumber: number }> {
-  const commitmentBytes = proofCommitment.startsWith("0x")
-    ? proofCommitment
-    : "0x" + proofCommitment;
-  const data = ethers.AbiCoder.defaultAbiCoder().encode(
-    ["bytes", "bytes32", "string", "address", "uint256"],
-    [
-      commitmentBytes,
-      ethers.zeroPadValue(credentialHash, 32),
-      proofType,
-      ethers.getAddress(proverAddress),
-      Math.floor(Date.now() / 1000),
-    ],
-  );
-  return callAuditAnchor(
-    "KRYDO_ZK_PROOF_V2",
-    ethers.zeroPadValue(credentialHash, 32),
-    data,
-  );
-}
-
 export async function anchorRoleViaMetaMask(
   walletAddress: string,
   role: string,

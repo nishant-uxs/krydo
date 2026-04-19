@@ -188,7 +188,12 @@ export default function ZkProofsPage() {
                 value={selectedCredential?.id || ""}
                 onValueChange={(id) => {
                   setSelectedCredential(activeCredentials.find((c) => c.id === id) || null);
+                  // Different credential = different numeric cap.
+                  // Clear inputs so a threshold valid for the previous
+                  // credential can't silently exceed the new one's cap.
                   setSelectedFields([]);
+                  setThreshold("");
+                  setTargetValue("");
                 }}
               >
                 <SelectTrigger data-testid="select-zk-credential">
@@ -234,7 +239,17 @@ export default function ZkProofsPage() {
 
           <div>
             <label className="text-sm font-medium mb-2 block">Proof Type</label>
-            <Select value={proofType} onValueChange={(v) => { setProofType(v as ProofType); setSelectedFields([]); }}>
+            <Select
+              value={proofType}
+              onValueChange={(v) => {
+                setProofType(v as ProofType);
+                // Reset all type-specific inputs so a threshold typed for
+                // one proof type can't silently become invalid for another.
+                setSelectedFields([]);
+                setThreshold("");
+                setTargetValue("");
+              }}
+            >
               <SelectTrigger data-testid="select-proof-type">
                 <SelectValue />
               </SelectTrigger>

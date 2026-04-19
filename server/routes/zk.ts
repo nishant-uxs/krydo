@@ -96,16 +96,35 @@ export function registerZkRoutes(app: Express) {
       if (claimData?.fields) allFields = claimData.fields;
       else if (claimData?.value) allFields = { value: claimData.value };
 
-      const proof = generateZkProof({
-        credentialId: data.credentialId,
-        claimValue,
-        proofType: data.proofType,
-        threshold: data.threshold,
-        targetValue: data.targetValue,
-        memberSet: data.memberSet,
-        selectedFields: data.selectedFields,
-        allFields,
-      });
+      let proof: ReturnType<typeof generateZkProof>;
+      try {
+        proof = generateZkProof({
+          credentialId: data.credentialId,
+          claimValue,
+          proofType: data.proofType,
+          threshold: data.threshold,
+          targetValue: data.targetValue,
+          memberSet: data.memberSet,
+          selectedFields: data.selectedFields,
+          allFields,
+        });
+      } catch (engineErr: any) {
+        // The ZK engine throws for caller-correctable mistakes like
+        // "range_above not supported on non-numeric values", missing
+        // threshold / targetValue / memberSet, or empty selectedFields.
+        // These are all 400s, not 500s.
+        const msg = engineErr?.message ?? "ZK proof generation failed";
+        if (
+          /not supported on non-numeric/i.test(msg) ||
+          /required for/i.test(msg) ||
+          /memberSet required/i.test(msg) ||
+          /selectedFields required/i.test(msg) ||
+          /allFields required/i.test(msg)
+        ) {
+          return res.status(400).json({ message: msg });
+        }
+        throw engineErr;
+      }
 
       // Compute expiry from ttlDays. Can't exceed the underlying credential's
       // own expiry — proof outlives credential is meaningless.
