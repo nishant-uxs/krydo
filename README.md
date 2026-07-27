@@ -7,16 +7,27 @@
 **Prove you qualify — without revealing what you have.**
 
 [![CI](https://github.com/nishant-uxs/krydo/actions/workflows/ci.yml/badge.svg)](https://github.com/nishant-uxs/krydo/actions/workflows/ci.yml)
+[![Live Demo](https://img.shields.io/badge/Live-krydo.onrender.com-6366f1?style=for-the-badge&logo=render&logoColor=white)](https://krydo.onrender.com)
 [![tests](https://img.shields.io/badge/tests-154%20passing-brightgreen)](./server/crypto/sigma.test.ts)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
-[![Network: Sepolia](https://img.shields.io/badge/network-Sepolia-627EEA?logo=ethereum&logoColor=white)](https://sepolia.etherscan.io/address/0x0BE4fE934Ff4e9B24186C1cdd0cdFe0594209821)
-[![Made with TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Network: Sepolia](https://img.shields.io/badge/Network-Sepolia-3C3C3D?style=for-the-badge&logo=ethereum&logoColor=white)](https://sepolia.etherscan.io/address/0x0BE4fE934Ff4e9B24186C1cdd0cdFe0594209821)
+[![License: MIT](https://img.shields.io/badge/License-MIT-1e293b?style=for-the-badge)](./LICENSE)
 [![docs](https://img.shields.io/badge/docs-DOCUMENTATION.md-blue)](./DOCUMENTATION.md)
-[![security: disclosed privately](https://img.shields.io/badge/security-disclosure%20policy-red)](./SECURITY.md)
 
-**[📖 Full Technical Documentation →](./DOCUMENTATION.md)**
+**[Full Technical Documentation →](./DOCUMENTATION.md)**
 
 </div>
+
+---
+
+## Overview
+
+| | |
+|---|---|
+| **Live demo** | https://krydo.onrender.com |
+| **Network** | Ethereum Sepolia testnet |
+| **Stack** | TypeScript · React · Express · Solidity · Firestore · ethers.js v6 |
+
+**6 sigma-protocol ZK proofs** · **154 unit tests** · **3 Sepolia contracts** · W3C Verifiable Credential export
 
 ---
 
